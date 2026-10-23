@@ -166,6 +166,8 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-23 | Kept kit `docs/ARCHITECTURE.md` (266 lines) instead of regenerating under 150 | Already authored and consistent with the spec; regenerating would lose content. |
 | 2026-10-23 | `pyproject.toml` has `[project]` + setuptools; `pip install -e . --no-deps` | `src/` layout needs an install for `python -m askauto.mcp_server`. Deps stay in `requirements.txt` only. |
 | 2026-10-23 | Spec docs moved from repo root into `docs/` | CLAUDE.md references `docs/…` paths. Notebooks moved alongside. |
+| 2026-10-23 | Sales data spans 2023-01-01 to 2026-06-30 | Spec gives no range; "last year" must resolve to a full year of data (2025). User-approved. |
+| 2026-10-23 | DB at `data/askauto.db` inside the repo (OneDrive) | Demo/learning project; simplicity over sync-lock risk. User-approved. |
 
 ---
 
@@ -177,11 +179,12 @@ Things to resolve before the next stage.
       "Done when" says 25 questions *pass*. Spec wins — confirm 25/25 or 90%.
 - [ ] **Retry count.** "max 3 attempts" (spec) vs "retry ×3" (architecture):
       3 generations total, or 1 + 3 retries?
-- [ ] **Data date range** (session 1). "Last year" = previous full calendar
-      year. Seeded sales must cover 2025 so "last year" (today: 2026) has data.
-      Which years should the synthetic data span?
+- [x] **Data date range** (session 1). Resolved 2026-10-23: seeded `sale_date`
+      spans **2023-01-01 to 2026-06-30**. 2023–2025 are full years, so
+      "last year" (= 2025) is fully covered; 2026 is a partial year.
 - [ ] **Verify tolerance** (session 6). Answer says "$1.2M", row says
       1234567.89 — what rounding/format counts as "figure appears in rows"?
-- [ ] **DB location** (session 1). Repo is inside OneDrive; a live SQLite file
-      there can hit sync locks. Keep `data/` in repo or point `DATABASE_PATH`
-      outside OneDrive?
+- [x] **DB location** (session 1). Resolved 2026-10-23: keep
+      `data/askauto.db` in the repo (demo/learning project). File stays
+      gitignored and is rebuilt by the build scripts. If OneDrive ever locks it,
+      pause sync or point `DATABASE_PATH` elsewhere.
