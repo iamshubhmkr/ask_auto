@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 0 done (pending first commit), Session 1 next
+**Current stage:** 1 — Session 0 done, Session 1 (database) next
 **Last updated:** 2026-10-23
 
 ---
@@ -22,7 +22,7 @@ session knows where to resume.
 - [x] `.claude/skills/` — stage-done, trap-check
 - [x] `.claude/hooks/guard_imports.py` — import-boundary guard (see Decisions)
 - [x] `git init`
-- [ ] First commit ← **user does this** (git identity not configured)
+- [x] First commit `508d851`, pushed to https://github.com/iamshubhmkr/ask_auto
 - [ ] `/context` confirms CLAUDE.md loaded ← **user runs this**
 
 ### Session 1 — Database
