@@ -1,0 +1,28 @@
+# Pinned to the versions pip resolved together on 2026-10-23 (pip check clean).
+# Install: python -m pip install -r requirements.txt && python -m pip install -e . --no-deps
+
+# Agent orchestration
+langgraph==1.2.16
+langchain-core==1.7.0
+
+# Data boundary
+mcp==2.3.0
+aiosqlite==0.22.1
+sqlglot==30.24.0
+
+# Contracts and config
+pydantic==2.14.1
+pydantic-settings==2.16.1
+PyYAML==6.0.3
+
+# LLM provider
+groq==1.7.0
+
+# API
+fastapi==0.161.1
+uvicorn==0.54.0
+
+# Dev
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.17.2
