@@ -6,8 +6,8 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 0 done, Session 1 (database) next
-**Last updated:** 2026-10-23
+**Current stage:** 1 — Session 1 done, Session 2 (metadata) next
+**Last updated:** 2026-10-24
 
 ---
 
@@ -26,12 +26,22 @@ session knows where to resume.
 - [ ] `/context` confirms CLAUDE.md loaded ← **user runs this**
 
 ### Session 1 — Database
-- [ ] `scripts/build_database.py` with explicit DDL
-- [ ] Seeded data: ~20 dealers, ~40 vehicles, ~5,000 sales
-- [ ] `PRAGMA foreign_key_list(sales)` returns 2 rows ← **verify by hand**
-- [ ] Row counts identical across two consecutive runs
-- [ ] Trap 1 present: gross and net revenue differ by 2–5%
-- [ ] Trap 2 present: `region` has exactly 4 distinct values
+- [x] `scripts/build_database.py` with explicit DDL (spec DDL verbatim, no pandas)
+- [x] Seeded data: 20 dealers, 40 vehicles, 5,000 sales (seed 42)
+- [x] `PRAGMA foreign_key_list(sales)` returns 2 rows ← verified by hand
+- [x] Row counts identical across two consecutive runs — and full data
+      fingerprint identical: `14cb4047…fb1287e7`
+- [x] Trap 1 present: gross 173,070,073.75 vs net 166,989,244.64 (gap 3.51%)
+- [x] Trap 2 present: `region` has exactly 4 distinct values; `'North East'` → 0 rows
+- [x] `tests/test_build_database.py` — 10 tests incl. both traps + determinism
+- [x] Proved the FK check catches the `to_sql` mistake (stripped REFERENCES → FAIL)
+
+**Data facts for later sessions** (seed 42):
+sales 2023-01-01 .. 2026-06-30 (2026 is a half year). 5 dealers per region:
+1 Flagship, 2 Standard, 2 Satellite; Flagship sells ~3× a Satellite.
+EV share by year: 2023 17.0%, 2024 27.1%, 2025 36.2%, 2026 43.4%.
+Full fingerprint: `14cb404714fb9d9ad2f2cf1d95b29df2cca13096175414c156dec539fb1287e7`
+— if a rebuild prints anything else, the data changed (CLAUDE.md: that's a bug).
 
 ### Session 2 — Metadata
 - [ ] `metadata/*.yaml` authored — descriptions, grain, glossary
@@ -147,7 +157,12 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # exit 5 "no tests ran" until session 1+
+.venv/Scripts/pytest -q               # session 1: 10 passed
+
+# Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
+.venv/Scripts/python scripts/build_database.py
+# Manual FK check (no sqlite3 CLI on this machine; use Python) -> 2 rows
+.venv/Scripts/python -c "import sqlite3; print(sqlite3.connect('data/askauto.db').execute('PRAGMA foreign_key_list(sales)').fetchall())"
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -168,6 +183,9 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-23 | Spec docs moved from repo root into `docs/` | CLAUDE.md references `docs/…` paths. Notebooks moved alongside. |
 | 2026-10-23 | Sales data spans 2023-01-01 to 2026-06-30 | Spec gives no range; "last year" must resolve to a full year of data (2025). User-approved. |
 | 2026-10-23 | DB at `data/askauto.db` inside the repo (OneDrive) | Demo/learning project; simplicity over sync-lock risk. User-approved. |
+| 2026-10-24 | No NULLs in seeded data, though spec allows them on city/model_year/msrp | Avoid adding traps the spec didn't ask for. |
+| 2026-10-24 | Vehicles only sold within ±1 year of their model_year; EV/Hybrid weight grows yearly | Realism; gives "EV share" a real trend for evals. EV share is high vs real US market — fine for a demo. |
+| 2026-10-24 | Build tests load the script via importlib; tests never import sqlite3 | Keeps the `/stage-done` grep (sqlite3 outside mcp_server/ or scripts/) clean. |
 
 ---
 
