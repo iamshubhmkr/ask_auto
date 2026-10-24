@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 3 done, Session 4 (providers + config) next
+**Current stage:** 1 — Session 4 done, Session 5 (agent, happy path) next
 **Last updated:** 2026-10-24
 
 ---
@@ -85,12 +85,31 @@ EV share (all years) 29.08% · last year = 2025 (1,477 sales, 2025-01-01..2025-1
 - `sql_guard.guard_sql` + `models.py` import no DB code, so `agent/` may reuse them.
 
 ### Session 4 — Providers and config
-- [ ] `config.py` via pydantic-settings
-- [ ] `LLMProvider` protocol + Groq implementation
-- [ ] Three call sites with correct temperatures
-- [ ] Every method takes a Pydantic output schema
-- [ ] Rate-limit retry with backoff
-- [ ] Smoke test confirms the Groq key works
+- [x] `config.py` via pydantic-settings — `groq_api_key` (SecretStr), `groq_model`,
+      `llm_timeout_s`, `llm_max_retries` added to the session-3 DB settings
+- [x] `LLMProvider` protocol (`providers/base.py`, provider-agnostic) + `GroqProvider`
+      (`providers/groq_provider.py`, the only file importing `groq`)
+- [x] Three call sites with correct temperatures — `CALL_SETTINGS` in base.py:
+      classify 0.0 · generate_sql 0.0 · synthesize 0.4, each with an output-token cap
+- [x] Every method takes a Pydantic output schema — single
+      `complete(call, messages, schema) -> T`, Groq strict json_schema mode
+- [x] Rate-limit retry with backoff — 429 / 5xx / connection errors; honours
+      `retry-after`; 400s not retried; truncated output (`finish_reason=length`) → `LLMError`
+- [x] Smoke test confirms the Groq key works — `python -m askauto.providers.smoke`
+      (classify 1.02s · generate_sql 0.69s · synthesize 0.60s)
+- [x] `tests/test_providers.py` — 15 tests, fake client, no network
+
+**Model comparison (2026-10-24, same SQLPlan task, 10 runs each):**
+
+| Model | Degenerate output | Avg latency | Max |
+|---|---|---|---|
+| `qwen/qwen3.8-27b` | 5/10 (5/5 on a minimal prompt) | 5.7–13.8 s | 24 s |
+| `openai/gpt-oss-20b` ← **default** | 0/10 | 0.55 s | 0.65 s |
+| `openai/gpt-oss-120b` | 0/10 | 0.75 s | 0.91 s |
+
+qwen loops inside the JSON `sql` string (`"}]}]}…`) until a limit stops it; the
+output still *validates* as a string. Lesson: a 3-run sample picked the wrong
+model. Re-test with more runs before trusting a latency number.
 
 ### Session 5 — Agent, happy path
 - [ ] Plan reviewed before any code ← **use plan mode**
@@ -179,7 +198,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 3: 71 passed (~5s)
+.venv/Scripts/pytest -q               # session 4: 86 passed (~7s), no network
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -195,6 +214,9 @@ python -m venv .venv
 .venv/Scripts/python -m askauto.mcp_server.probe     # launches it + calls every tool
 # MCP Inspector (after installing Node.js LTS):
 npx @modelcontextprotocol/inspector .venv/Scripts/python -m askauto.mcp_server
+
+# LLM provider (session 4) -- real Groq calls, needs GROQ_API_KEY in .env
+.venv/Scripts/python -m askauto.providers.smoke
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -228,6 +250,12 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-24 | Minimal `config.py` created in session 3 (DB path, schema mode, timeout, row cap) | The server needs settings now; session 4 adds the Groq fields. |
 | 2026-10-24 | Manual MCP check via a Python stdio probe; Inspector deferred | Node.js not installed. User chose probe now + Inspector later. |
 | 2026-10-24 | `mcp` 2.x API: `MCPServer`, not `FastMCP` | Pinned `mcp==2.3.0`; v1 tutorials won't match. Verified against installed source. |
+| 2026-10-24 | Default model `openai/gpt-oss-20b` (spec says only "Groq") | qwen3.8-27b looped/degenerated on structured SQL; gpt-oss-20b 0/10 failures, ~0.55 s. User-approved. Override via `GROQ_MODEL`. |
+| 2026-10-24 | One `complete(call, messages, schema)` method; temperatures in provider-agnostic `CALL_SETTINGS` | A Bedrock provider reuses the same per-call settings; agent code never sees a temperature. |
+| 2026-10-24 | Synthesize returns a schema too (prose in a field) | CLAUDE.md: structured output only, never parse prose. Spec's "free prose" is the field's content. |
+| 2026-10-24 | Output-token cap per call site; `finish_reason=length` → `LLMError` | Bounds latency when a model loops (seen with qwen). |
+| 2026-10-24 | SDK retries off (`max_retries=0`); own backoff, injectable `sleep` | Explicit and unit-testable; honours `retry-after`. |
+| 2026-10-24 | Provider tests reach Groq exception classes via `groq_provider.groq` | Tests still never `import groq` (CLAUDE.md invariant). |
 
 ---
 
