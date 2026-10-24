@@ -42,6 +42,22 @@ def _reject(sql: str, reason: str) -> GuardResult:
     return GuardResult(ok=False, sql=sql, reason=reason)
 
 
+def _ambiguity_hint(root: exp.Expression, catalog: Catalog, tables: set[str]) -> str | None:
+    """Name an unqualified column that exists in more than one joined table.
+
+    sqlglot reports these as "could not be resolved"; SQLite calls them ambiguous.
+    The specific wording tells the next attempt exactly what to fix.
+    """
+    for column in root.find_all(exp.Column):
+        if column.table:
+            continue
+        owners = sorted(t for t in tables if column.name.lower() in catalog.get(t, {}))
+        if len(owners) > 1:
+            return (f"Column '{column.name}' is ambiguous: it exists in "
+                    f"{' and '.join(owners)}. Qualify it, e.g. {owners[0]}.{column.name}.")
+    return None
+
+
 def guard_sql(sql: str, catalog: Catalog, max_rows: int) -> GuardResult:
     """Validate a read-only query and return it with a LIMIT of at most max_rows."""
     try:
@@ -87,7 +103,8 @@ def guard_sql(sql: str, catalog: Catalog, max_rows: int) -> GuardResult:
         qualify(root.copy(), schema=catalog, dialect=DIALECT,
                 validate_qualify_columns=True)
     except SqlglotError as exc:
-        return _reject(sql, f"Column check failed: {exc}.")
+        return _reject(sql, _ambiguity_hint(root, catalog, tables_used)
+                       or f"Column check failed: {exc}.")
 
     limit = root.args.get("limit")
     if limit is None:

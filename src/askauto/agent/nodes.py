@@ -1,4 +1,109 @@
-"""Graph nodes. Session 5.
+"""The eight graph nodes.
 
-classify, load_context, generate_sql, validate, execute, inspect, synthesize, verify.
+Each node takes the state, returns only the fields it changes, and appends one
+trace entry. Nodes never raise for a business outcome (unanswerable, rejected
+SQL, zero rows, unverified figure): they record it, and the edge functions in
+graph.py decide what happens next. Data access is only through the MCP client.
 """
+
+from askauto.agent.prompts import classify_messages, sql_messages, synthesize_messages
+from askauto.agent.state import (
+    AgentState,
+    Answer,
+    Classification,
+    SQLAttempt,
+    SQLPlan,
+)
+from askauto.agent.verify import describe, verify_answer
+from askauto.mcp_client import McpTools
+from askauto.mcp_server.models import SchemaContext
+from askauto.mcp_server.sql_guard import guard_sql
+from askauto.providers import LLMProvider
+
+Update = dict[str, object]
+
+
+class AgentNodes:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        tools: McpTools,
+        startup_schema: SchemaContext,
+        max_rows: int = 500,
+    ) -> None:
+        """`startup_schema` is the bundle cached at startup, so classify needs no MCP call."""
+        self.provider = provider
+        self.tools = tools
+        self.startup_schema = startup_schema
+        self.max_rows = max_rows
+
+    async def classify(self, state: AgentState) -> Update:
+        result = await self.provider.complete(
+            "classify", classify_messages(state.question, self.startup_schema), Classification
+        )
+        return {"classification": result,
+                "trace": [f"classify: {result.label} - {result.reason}"]}
+
+    async def load_context(self, state: AgentState) -> Update:
+        context = await self.tools.get_schema_context(state.question)
+        return {"schema_context": context,
+                "trace": [f"load_context: {len(context.tables)} tables, "
+                          f"{len(context.glossary)} glossary terms (mode={context.mode})"]}
+
+    async def generate_sql(self, state: AgentState) -> Update:
+        failed = [a for a in state.sql_attempts if a.error]
+        plan = await self.provider.complete(
+            "generate_sql", sql_messages(state.question, state.schema_context, failed), SQLPlan
+        )
+        attempts = [*state.sql_attempts, SQLAttempt(plan=plan)]
+        return {"sql_attempts": attempts, "retry_count": len(attempts) - 1,
+                "trace": [f"generate_sql: attempt {len(attempts)}"]}
+
+    async def validate(self, state: AgentState) -> Update:
+        attempt = state.current_attempt
+        guarded = guard_sql(attempt.plan.sql, state.schema_context.catalog(), self.max_rows)
+        error = None if guarded.ok else f"rejected by validator: {guarded.reason}"
+        updated = attempt.model_copy(update={"guard_ok": guarded.ok, "error": error})
+        return {"sql_attempts": [*state.sql_attempts[:-1], updated],
+                "trace": [f"validate: {'ok' if guarded.ok else error}"]}
+
+    async def execute(self, state: AgentState) -> Update:
+        attempt = state.current_attempt
+        result = await self.tools.run_sql(attempt.plan.sql, limit=self.max_rows)
+        error = None if result.ok else f"{result.error.kind}: {result.error.message}"
+        updated = attempt.model_copy(update={"error": error})
+        note = f"{result.row_count} rows" if result.ok else error
+        return {"result": result, "sql_attempts": [*state.sql_attempts[:-1], updated],
+                "trace": [f"execute: {note}"]}
+
+    async def inspect(self, state: AgentState) -> Update:
+        result = state.result
+        if not result.ok:
+            outcome = "error"
+        elif result.row_count == 0:
+            outcome = "zero_rows"
+        else:
+            outcome = "rows"
+        return {"outcome": outcome, "trace": [f"inspect: {outcome}"]}
+
+    async def synthesize(self, state: AgentState) -> Update:
+        previous = state.verification
+        unsupported = previous.unsupported if previous and not previous.ok else []
+        answer = await self.provider.complete(
+            "synthesize",
+            synthesize_messages(state.question, state.current_attempt.plan, state.result,
+                                unsupported),
+            Answer,
+        )
+        retries = state.synth_retry_count + (1 if state.answer is not None else 0)
+        return {"answer": answer, "synth_retry_count": retries,
+                "trace": [f"synthesize: {len(answer.text)} chars"]}
+
+    async def verify(self, state: AgentState) -> Update:
+        plan = state.current_attempt.plan
+        verification = verify_answer(
+            state.answer.text, state.result,
+            question=state.question, assumptions=plan.assumptions, sql=plan.sql,
+        )
+        return {"verification": verification,
+                "trace": [f"verify: {describe(verification)}"]}

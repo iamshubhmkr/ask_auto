@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 4 done, Session 5 (agent, happy path) next
+**Current stage:** 1 — Session 5 done, Session 6 (backward edges) next
 **Last updated:** 2026-10-24
 
 ---
@@ -112,11 +112,37 @@ output still *validates* as a string. Lesson: a 3-run sample picked the wrong
 model. Re-test with more runs before trusting a latency number.
 
 ### Session 5 — Agent, happy path
-- [ ] Plan reviewed before any code ← **use plan mode**
-- [ ] `state.py` — single Pydantic state model
-- [ ] Eight nodes, linear wiring only
-- [ ] No `sqlite3` or `aiosqlite` import anywhere in `agent/`
-- [ ] One question answered end to end
+- [x] Plan reviewed before any code ← plan mode, user-approved
+- [x] `state.py` — single Pydantic state model (`AgentState`) + call schemas
+      (`Classification`, `SQLPlan`, `Answer`) and `SQLAttempt`, `Verification`
+- [x] Eight nodes, linear wiring only — `nodes.py` (`AgentNodes`), `graph.py`
+      (4 named edge functions that raise `AgentError` on non-happy outcomes)
+- [x] No `sqlite3` or `aiosqlite` import anywhere in `agent/` (grep + hook)
+- [x] One question answered end to end — `python -m askauto.agent "…"`, real Groq + stdio MCP
+- [x] `src/askauto/mcp_client.py` — typed `McpTools` (shared with the API in session 7)
+- [x] `agent/prompts.py` — everything rendered from `SchemaContext`; a test asserts the
+      source names no business table/column/value
+- [x] `agent/verify.py` — figures match at shown precision (user decision)
+- [x] `tests/test_agent.py` (10) + `tests/test_verify.py` (13) — LLM mocked, real MCP
+
+**Live questions (gpt-oss-20b), each checked against the DB by hand:**
+
+| Question | Result | Latency |
+|---|---|---|
+| net revenue last year | $52.2M — DB 52,228,431.60 ✓ (gross would be $54.1M); used both glossary expressions | 3.8 s |
+| North East units 2024 | 351 ✓, mapped to `'Northeast'` in assumptions | 2.9 s |
+| top 3 dealers by revenue 2025 | D01 $4.61M, D06 $4.61M, D16 $3.88M ✓ | 3.9 s |
+| average credit score | classify → unanswerable (stops before any MCP call) | — |
+
+**Found by live runs, fixed this session (mocks could not have caught them):**
+1. classify called "North East" *ambiguous* (read the column description as doubt) →
+   instruction: spelling variants are not ambiguity.
+2. Unqualified `dealer_id` in a join was rejected as "could not be resolved" —
+   SQLite calls it ambiguous → guard now says which tables and how to qualify;
+   SQL prompt says to qualify columns when joining.
+
+**For session 6:** nodes already pass earlier failed attempts to `sql_messages`
+and unsupported figures to `synthesize_messages`; only `graph.py` edges change.
 
 ### Session 6 — Backward edges
 - [ ] `validate` → `generate_sql` with error text, ceiling 3
@@ -198,7 +224,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 4: 86 passed (~7s), no network
+.venv/Scripts/pytest -q               # session 5: 111 passed (~15s), no network
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -217,6 +243,9 @@ npx @modelcontextprotocol/inspector .venv/Scripts/python -m askauto.mcp_server
 
 # LLM provider (session 4) -- real Groq calls, needs GROQ_API_KEY in .env
 .venv/Scripts/python -m askauto.providers.smoke
+
+# Agent (session 5) -- one question end to end, real Groq + stdio MCP server
+.venv/Scripts/python -m askauto.agent "What was our net revenue last year?"
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -256,6 +285,13 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-24 | Output-token cap per call site; `finish_reason=length` → `LLMError` | Bounds latency when a model loops (seen with qwen). |
 | 2026-10-24 | SDK retries off (`max_retries=0`); own backoff, injectable `sleep` | Explicit and unit-testable; honours `retry-after`. |
 | 2026-10-24 | Provider tests reach Groq exception classes via `groq_provider.groq` | Tests still never `import groq` (CLAUDE.md invariant). |
+| 2026-10-24 | **verify matches at shown precision**; numbers from question/assumptions/SQL/text cells are context | Resolves the open "verify tolerance" question. User-approved. |
+| 2026-10-24 | Nodes record outcomes; edge functions decide (session 5: raise `AgentError`) | Session 6 changes `graph.py` only. Retry ceilings will live in edge functions (agent rule). |
+| 2026-10-24 | classify uses the startup schema bundle, no MCP call | Spec: an unanswerable question never touches the database. |
+| 2026-10-24 | Agent reuses `mcp_server/sql_guard.py` + `models.py` | Both import no DB code; one validator, two call sites. Server check still authoritative. |
+| 2026-10-24 | `mcp_client.py` at package root (not in `agent/`) | Shared by agent and API (session 7). |
+| 2026-10-24 | verify reads the answer text | Required by spec ("every figure appears in rows"); a check on LLM output, not data extraction — consistent with "never parse prose". |
+| 2026-10-24 | Guard names ambiguous columns (session-3 module touched) | Live run: vague "could not be resolved" would waste a session-6 retry. |
 
 ---
 
@@ -270,8 +306,7 @@ Things to resolve before the next stage.
 - [x] **Data date range** (session 1). Resolved 2026-10-23: seeded `sale_date`
       spans **2023-01-01 to 2026-06-30**. 2023–2025 are full years, so
       "last year" (= 2025) is fully covered; 2026 is a partial year.
-- [ ] **Verify tolerance** (session 6). Answer says "$1.2M", row says
-      1234567.89 — what rounding/format counts as "figure appears in rows"?
+- [x] **Verify tolerance**. Resolved 2026-10-24: match at shown precision (see Decisions).
 - [x] **DB location** (session 1). Resolved 2026-10-23: keep
       `data/askauto.db` in the repo (demo/learning project). File stays
       gitignored and is rebuilt by the build scripts. If OneDrive ever locks it,

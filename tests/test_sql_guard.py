@@ -81,6 +81,21 @@ def test_unknown_column_rejected(sql: str, column: str) -> None:
     assert column in result.reason
 
 
+def test_ambiguous_column_named_specifically() -> None:
+    # Seen live in session 5: the agent's retry needs to know what to qualify.
+    result = guard("SELECT dealer_id, SUM(sale_price) FROM sales "
+                   "JOIN dealers ON sales.dealer_id = dealers.dealer_id GROUP BY dealer_id")
+    assert not result.ok
+    assert result.reason.startswith("Column 'dealer_id' is ambiguous: it exists in "
+                                    "dealers and sales")
+
+
+def test_shared_column_via_using_is_not_ambiguous() -> None:
+    result = guard("SELECT dealer_id, COUNT(*) FROM sales JOIN dealers USING (dealer_id) "
+                   "GROUP BY dealer_id")
+    assert result.ok, result.reason
+
+
 def test_missing_limit_injected() -> None:
     result = guard("SELECT region FROM dealers")
     assert result.ok
