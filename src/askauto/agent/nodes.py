@@ -1,4 +1,4 @@
-"""The eight graph nodes.
+"""The graph nodes: the eight from the spec plus four deterministic terminals.
 
 Each node takes the state, returns only the fields it changes, and appends one
 trace entry. Nodes never raise for a business outcome (unanswerable, rejected
@@ -6,6 +6,7 @@ SQL, zero rows, unverified figure): they record it, and the edge functions in
 graph.py decide what happens next. Data access is only through the MCP client.
 """
 
+from askauto.agent.literals import check_literals
 from askauto.agent.prompts import classify_messages, sql_messages, synthesize_messages
 from askauto.agent.state import (
     AgentState,
@@ -62,10 +63,12 @@ class AgentNodes:
     async def validate(self, state: AgentState) -> Update:
         attempt = state.current_attempt
         guarded = guard_sql(attempt.plan.sql, state.schema_context.catalog(), self.max_rows)
-        error = None if guarded.ok else f"rejected by validator: {guarded.reason}"
-        updated = attempt.model_copy(update={"guard_ok": guarded.ok, "error": error})
+        reason = guarded.reason if not guarded.ok else check_literals(
+            attempt.plan.sql, state.schema_context)
+        error = f"rejected by validator: {reason}" if reason else None
+        updated = attempt.model_copy(update={"guard_ok": error is None, "error": error})
         return {"sql_attempts": [*state.sql_attempts[:-1], updated],
-                "trace": [f"validate: {'ok' if guarded.ok else error}"]}
+                "trace": [f"validate: {error or 'ok'}"]}
 
     async def execute(self, state: AgentState) -> Update:
         attempt = state.current_attempt
@@ -105,5 +108,46 @@ class AgentNodes:
             state.answer.text, state.result,
             question=state.question, assumptions=plan.assumptions, sql=plan.sql,
         )
-        return {"verification": verification,
-                "trace": [f"verify: {describe(verification)}"]}
+        update: Update = {"verification": verification,
+                          "trace": [f"verify: {describe(verification)}"]}
+        if verification.ok:
+            update["status"] = "answered"
+        return update
+
+    # --- Terminal nodes: deterministic, no LLM ---------------------------------
+
+    async def refuse(self, state: AgentState) -> Update:
+        """Name what is missing: the classifier's reason plus any matching known gap."""
+        reasons = [u.reason for u in self.startup_schema.unanswerable
+                   if _mentions(state.question, u.topic)]
+        text = " ".join(["I can't answer that from this data.",
+                         state.classification.reason, *reasons])
+        return {"answer": Answer(text=text), "status": "refused",
+                "trace": [f"refuse: {len(reasons)} known gap(s) matched"]}
+
+    async def clarify(self, state: AgentState) -> Update:
+        classification = state.classification
+        text = classification.clarifying_question or (
+            f"Could you clarify the question? {classification.reason}")
+        return {"answer": Answer(text=text), "status": "clarification_needed",
+                "trace": ["clarify: asked the user to clarify"]}
+
+    async def give_up(self, state: AgentState) -> Update:
+        attempts = len(state.sql_attempts)
+        text = (f"I couldn't build a working query for this question after {attempts} "
+                f"attempts. The last attempt failed: {state.current_attempt.error}")
+        return {"answer": Answer(text=text), "status": "failed",
+                "trace": [f"give_up: {attempts} SQL attempts failed"]}
+
+    async def add_caveat(self, state: AgentState) -> Update:
+        figures = ", ".join(state.verification.unsupported)
+        text = (f"{state.answer.text}\n\nNote: these figures could not be verified "
+                f"against the query results: {figures}.")
+        return {"answer": Answer(text=text), "status": "unverified",
+                "trace": [f"add_caveat: unverified {figures}"]}
+
+
+def _mentions(question: str, topic: str) -> bool:
+    """True if the question uses a significant word of the topic ('credit scores')."""
+    text = question.lower()
+    return any(word.rstrip("s") in text for word in topic.lower().split() if len(word) > 3)

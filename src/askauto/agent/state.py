@@ -69,6 +69,10 @@ class AgentState(BaseModel):
     outcome: Literal["rows", "zero_rows", "error"] | None = None
     answer: Answer | None = None
     verification: Verification | None = None
+    # How the run ended; set by verify or a terminal node. The API and evals read it.
+    status: Literal[
+        "answered", "refused", "clarification_needed", "failed", "unverified"
+    ] | None = None
     retry_count: int = 0  # SQL attempts beyond the first
     synth_retry_count: int = 0  # synthesize calls beyond the first
     trace: Annotated[list[str], operator.add] = []

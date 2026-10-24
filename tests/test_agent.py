@@ -1,5 +1,8 @@
 """Agent tests: the real graph and a real in-process MCP server on a temp database,
-with the LLM provider mocked (never call Groq in a unit test)."""
+with the LLM provider mocked (never call Groq in a unit test).
+
+Every backward and sideways edge has a test that forces it to fire.
+"""
 
 import importlib.util
 import re
@@ -10,8 +13,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from askauto.agent import graph as graph_module
 from askauto.agent import prompts
-from askauto.agent.graph import NODE_ORDER, AgentError, build_graph, run_agent
+from askauto.agent.graph import MAX_SQL_ATTEMPTS, NODE_ORDER, build_graph, run_agent
 from askauto.agent.nodes import AgentNodes
 from askauto.agent.state import AgentState, Answer, Classification, SQLPlan
 from askauto.config import Settings
@@ -22,6 +26,7 @@ from askauto.providers import Message
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NET_SQL = "SELECT SUM(sale_price - discount_amount) AS net_revenue FROM sales"
+GOOD_ANSWER = "Net revenue was $167.0M ($166,989,244.64)."
 ANSWERABLE = Classification(label="answerable", reason="sales data covers it",
                             clarifying_question=None)
 
@@ -55,56 +60,55 @@ class FakeProvider:
         assert isinstance(response, schema)
         return response
 
-    def prompt(self, call: str) -> str:
-        return "\n".join(m.content for c, msgs, _ in self.calls if c == call for m in msgs)
+    def count(self, call: str) -> int:
+        return sum(1 for c, _, _ in self.calls if c == call)
+
+    def prompt(self, call: str, index: int = 0) -> str:
+        messages = [msgs for c, msgs, _ in self.calls if c == call][index]
+        return "\n".join(m.content for m in messages)
 
 
 def plan(sql: str = NET_SQL) -> SQLPlan:
     return SQLPlan(sql=sql, tables_used=["sales"], assumptions=["revenue = net revenue"])
 
 
+def answers(*texts: str) -> list[Answer]:
+    return [Answer(text=t) for t in texts]
+
+
 async def ask(db_path: Path, provider: FakeProvider, question: str = "What was net revenue?"
-              ) -> tuple[AgentState | AgentError, McpTools]:
+              ) -> tuple[AgentState, McpTools]:
     async with McpTools.connect(create_server(Settings(database_path=db_path))) as tools:
         startup = await tools.get_schema_context()
         tools.calls.clear()  # count only what the graph does
-        graph = build_graph(AgentNodes(provider, tools, startup))
-        try:
-            return await run_agent(graph, question), tools
-        except AgentError as exc:
-            return exc, tools
+        state = await run_agent(build_graph(AgentNodes(provider, tools, startup)), question)
+        return state, tools
 
 
-def happy_provider(answer: str = "Net revenue was $167.0M ($166,989,244.64).") -> FakeProvider:
-    return FakeProvider(classify=[ANSWERABLE], generate_sql=[plan()],
-                        synthesize=[Answer(text=answer)])
+def steps(state: AgentState) -> list[str]:
+    return [entry.split(":")[0] for entry in state.trace]
+
+
+# --- Happy path -------------------------------------------------------------------
 
 
 async def test_happy_path_runs_all_eight_nodes(db_path: Path) -> None:
-    state, _ = await ask(db_path, happy_provider())
-    assert isinstance(state, AgentState)
-    assert [entry.split(":")[0] for entry in state.trace] == list(NODE_ORDER)
+    provider = FakeProvider(classify=[ANSWERABLE], generate_sql=[plan()],
+                            synthesize=answers(GOOD_ANSWER))
+    state, tools = await ask(db_path, provider)
+    assert steps(state) == list(NODE_ORDER)
+    assert state.status == "answered"
     assert state.result.rows == [{"net_revenue": 166989244.64}]
-    assert state.outcome == "rows"
-    assert state.verification.ok
-    assert state.retry_count == 0
-
-
-async def test_each_call_site_gets_its_schema(db_path: Path) -> None:
-    provider = happy_provider()
-    await ask(db_path, provider)
+    assert state.retry_count == 0 and state.synth_retry_count == 0
+    # classify needs no MCP call; the cached schema bundle serves load_context.
+    assert tools.calls == ["run_sql"]
     assert [(call, schema) for call, _, schema in provider.calls] == [
         ("classify", Classification), ("generate_sql", SQLPlan), ("synthesize", Answer)]
 
 
-async def test_mcp_traffic(db_path: Path) -> None:
-    # classify needs no MCP call; the cached schema bundle serves load_context.
-    _, tools = await ask(db_path, happy_provider())
-    assert tools.calls == ["run_sql"]
-
-
 async def test_prompts_carry_the_metadata(db_path: Path) -> None:
-    provider = happy_provider()
+    provider = FakeProvider(classify=[ANSWERABLE], generate_sql=[plan()],
+                            synthesize=answers(GOOD_ANSWER))
     await ask(db_path, provider)
     sql_prompt = provider.prompt("generate_sql")
     assert "'Northeast'" in sql_prompt  # trap 2: exact allowed value
@@ -133,35 +137,129 @@ def test_prompt_source_has_no_hardcoded_schema() -> None:
         assert not re.search(rf"\b{name}\b", source), f"prompts.py names '{name}'"
 
 
-async def test_unanswerable_fails_loudly_without_touching_data(db_path: Path) -> None:
+def test_edges_are_named_functions_not_lambdas() -> None:
+    source = Path(graph_module.__file__).read_text(encoding="utf-8")
+    assert "lambda" not in source
+
+
+# --- Sideways: classify -> refuse / clarify --------------------------------------------
+
+
+async def test_unanswerable_is_refused_without_touching_data(db_path: Path) -> None:
     provider = FakeProvider(classify=[Classification(
-        label="unanswerable", reason="no credit score data", clarifying_question=None)])
-    error, tools = await ask(db_path, provider, "Average credit score of buyers?")
-    assert isinstance(error, AgentError)
-    assert "unanswerable" in str(error)
+        label="unanswerable", reason="There is no credit score data.",
+        clarifying_question=None)])
+    state, tools = await ask(db_path, provider, "What is the average credit score of buyers?")
+    assert steps(state) == ["classify", "refuse"]
+    assert state.status == "refused"
     assert tools.calls == []
-    assert error.state.trace == ["classify: unanswerable - no credit score data"]
+    assert "no credit score data" in state.answer.text
+    assert "Only the finance type" in state.answer.text  # reason from meta_unanswerable
 
 
-async def test_rejected_sql_fails_loudly(db_path: Path) -> None:
+async def test_ambiguous_asks_for_clarification(db_path: Path) -> None:
+    provider = FakeProvider(classify=[Classification(
+        label="ambiguous", reason="'best' could mean units or revenue",
+        clarifying_question="Do you mean best by units sold or by net revenue?")])
+    state, tools = await ask(db_path, provider, "Which dealer is best?")
+    assert steps(state) == ["classify", "clarify"]
+    assert state.status == "clarification_needed"
+    assert state.answer.text == "Do you mean best by units sold or by net revenue?"
+    assert tools.calls == []
+
+
+# --- Backwards: SQL retries ------------------------------------------------------
+
+
+async def test_validate_failure_retries_with_the_error(db_path: Path) -> None:
     provider = FakeProvider(classify=[ANSWERABLE],
-                            generate_sql=[plan("SELECT * FROM meta_glossary")])
-    error, tools = await ask(db_path, provider)
-    assert isinstance(error, AgentError)
-    assert "Table 'meta_glossary' is not queryable" in str(error)
-    assert tools.calls == []  # the agent-side check stopped it before MCP
+                            generate_sql=[plan("SELECT * FROM meta_glossary"), plan()],
+                            synthesize=answers(GOOD_ANSWER))
+    state, tools = await ask(db_path, provider)
+    assert state.status == "answered"
+    assert state.retry_count == 1
+    assert steps(state)[2:5] == ["generate_sql", "validate", "generate_sql"]
+    assert "Table 'meta_glossary' is not queryable" in provider.prompt("generate_sql", 1)
+    assert tools.calls == ["run_sql"]  # the bad attempt never reached the server
 
 
-async def test_zero_rows_fails_loudly_for_now(db_path: Path) -> None:
-    provider = FakeProvider(classify=[ANSWERABLE], generate_sql=[plan(
-        "SELECT dealer_name FROM dealers WHERE region = 'North East'")])
-    error, _ = await ask(db_path, provider)
-    assert isinstance(error, AgentError)
-    assert "0 rows" in str(error)
+async def test_misspelled_category_retries_with_allowed_values(db_path: Path) -> None:
+    # Trap 2 caught before execution instead of silently returning zero rows.
+    bad = "SELECT COUNT(*) AS n FROM sales JOIN dealers USING (dealer_id) " \
+          "WHERE region = 'North East'"
+    provider = FakeProvider(classify=[ANSWERABLE],
+                            generate_sql=[plan(bad), plan(bad.replace("North East", "Northeast"))],
+                            synthesize=answers("The Northeast count is in the rows."))
+    state, _ = await ask(db_path, provider, "How many cars did the North East sell?")
+    assert state.status == "answered"
+    feedback = provider.prompt("generate_sql", 1)
+    assert "'North East' is not an allowed value for region" in feedback
+    assert "'Northeast'" in feedback
+    assert state.result.rows[0]["n"] > 0
 
 
-async def test_unverified_figure_fails_loudly(db_path: Path) -> None:
-    error, _ = await ask(db_path, happy_provider("Net revenue was $250M."))
-    assert isinstance(error, AgentError)
-    assert "$250M" in str(error)
-    assert error.state.verification.unsupported == ["$250M"]
+async def test_execution_error_retries_and_shares_the_counter(db_path: Path) -> None:
+    # Passes the agent-side check, fails inside SQLite.
+    provider = FakeProvider(classify=[ANSWERABLE],
+                            generate_sql=[plan("SELECT json_extract(dealer_name, '$') AS j "
+                                               "FROM dealers"), plan()],
+                            synthesize=answers(GOOD_ANSWER))
+    state, tools = await ask(db_path, provider)
+    assert state.status == "answered"
+    assert state.retry_count == 1
+    assert tools.calls == ["run_sql", "run_sql"]
+    assert "sqlite_error" in provider.prompt("generate_sql", 1)
+
+
+async def test_sql_ceiling_gives_up_honestly(db_path: Path) -> None:
+    bad = plan("SELECT * FROM meta_glossary")
+    provider = FakeProvider(classify=[ANSWERABLE], generate_sql=[bad] * MAX_SQL_ATTEMPTS)
+    state, tools = await ask(db_path, provider)
+    assert provider.count("generate_sql") == MAX_SQL_ATTEMPTS == 3
+    assert steps(state)[-1] == "give_up"
+    assert state.status == "failed"
+    assert "after 3 attempts" in state.answer.text
+    assert "meta_glossary" in state.answer.text
+    assert tools.calls == []
+
+
+# --- Zero rows: explained, not "0" ---------------------------------------------------
+
+
+async def test_zero_rows_are_explained_not_reported_as_zero(db_path: Path) -> None:
+    provider = FakeProvider(
+        classify=[ANSWERABLE],
+        generate_sql=[plan("SELECT sale_id FROM sales WHERE sale_date > '2030-01-01'")],
+        synthesize=answers("There were 0 sales.",  # a measured zero it is not
+                           "No sales are recorded after that date."))
+    state, _ = await ask(db_path, provider, "How many sales after 2030?")
+    assert state.outcome == "zero_rows"
+    assert "returned no rows" in provider.prompt("synthesize", 0)
+    assert state.synth_retry_count == 1
+    assert state.status == "answered"
+    assert state.answer.text == "No sales are recorded after that date."
+
+
+# --- Backwards: verify -> synthesize (once) ---------------------------------------------
+
+
+async def test_unverified_figure_triggers_one_resynthesis(db_path: Path) -> None:
+    provider = FakeProvider(classify=[ANSWERABLE], generate_sql=[plan()],
+                            synthesize=answers("Net revenue was $250M.", GOOD_ANSWER))
+    state, _ = await ask(db_path, provider)
+    assert steps(state)[-4:] == ["synthesize", "verify", "synthesize", "verify"]
+    assert "$250M" in provider.prompt("synthesize", 1)  # told what to fix
+    assert state.status == "answered"
+    assert state.synth_retry_count == 1
+
+
+async def test_second_verify_failure_adds_a_caveat(db_path: Path) -> None:
+    provider = FakeProvider(classify=[ANSWERABLE], generate_sql=[plan()],
+                            synthesize=answers("Net revenue was $250M.",
+                                               "Net revenue was $250M."))
+    state, _ = await ask(db_path, provider)
+    assert provider.count("synthesize") == 2
+    assert steps(state)[-1] == "add_caveat"
+    assert state.status == "unverified"
+    assert state.answer.text.startswith("Net revenue was $250M.")
+    assert "could not be verified against the query results: $250M" in state.answer.text

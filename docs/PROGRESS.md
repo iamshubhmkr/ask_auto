@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 5 done, Session 6 (backward edges) next
+**Current stage:** 1 — Session 6 done, Session 7 (API) next
 **Last updated:** 2026-10-24
 
 ---
@@ -145,13 +145,31 @@ model. Re-test with more runs before trusting a latency number.
 and unsupported figures to `synthesize_messages`; only `graph.py` edges change.
 
 ### Session 6 — Backward edges
-- [ ] `validate` → `generate_sql` with error text, ceiling 3
-- [ ] `execute` error → `generate_sql`, shares the ceiling
-- [ ] `inspect` zero-rows → explains why, does not report "0"
-- [ ] `classify` → refuse / clarify
-- [ ] `verify` → `synthesize`, ceiling 1
-- [ ] Ceilings enforced in edge functions, not nodes
-- [ ] A test forces each backward edge to fire
+- [x] `validate` → `generate_sql` with error text, ceiling 3 (3 attempts **total**, user decision)
+- [x] `execute` error → `generate_sql`, shares the ceiling; ceiling hit → `give_up` (status `failed`)
+- [x] `inspect` zero-rows → explains why, does not report "0" (prompt branch + verify
+      rejects "0" when no rows came back)
+- [x] `classify` → refuse / clarify (deterministic terminal nodes, no MCP call)
+- [x] `verify` → `synthesize`, ceiling 1; second failure → `add_caveat` (status `unverified`)
+- [x] Ceilings enforced in edge functions, not nodes (`MAX_SQL_ATTEMPTS`, `MAX_RESYNTHESIS` in graph.py)
+- [x] A test forces each backward edge to fire — `tests/test_agent.py` (15 tests)
+- [x] Agent-side literal check (`agent/literals.py`, 14 tests): `region = 'North East'` →
+      validation error listing allowed values → retry (user decision)
+- [x] `AgentState.status`: answered · refused · clarification_needed · failed · unverified
+
+**Live (gpt-oss-20b), all checked against the DB:** credit score → refused, naming the
+gap · "best dealer" → clarifying question · Ford Prius → counted 0 (a real zero: one
+COUNT row, not zero rows) · net revenue last year $52.2M ✓ · North East 2024 351 ✓ ·
+top 3 dealers ✓ · EV share 2025 36.2% ✓ · Hybrid 2024 339 ✓.
+
+**Found by live runs, fixed this session:**
+1. Groq answers **400 `json_validate_failed`** when gpt-oss-20b misses a schema field
+   (strict mode is checked after generation). Was fatal → now retried, shared budget.
+2. Latency spikes (13–35 s) were invisible rate-limit sleeps → provider now logs every retry.
+
+**Rate limit (this Groq account): 8,000 tokens/min**, 1,000 requests per reset window.
+One question ≈ 3.7K prompt tokens + output ≈ 5K → ~1.5 questions/min before 429s.
+Single question: 2–4 s. Back-to-back: throttled. See open question on evals.
 
 ### Session 7 — API
 - [ ] `POST /ask` matching the spec contract exactly
@@ -224,7 +242,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 5: 111 passed (~15s), no network
+.venv/Scripts/pytest -q               # session 6: 131 passed (~10s), no network
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -292,6 +310,12 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-24 | `mcp_client.py` at package root (not in `agent/`) | Shared by agent and API (session 7). |
 | 2026-10-24 | verify reads the answer text | Required by spec ("every figure appears in rows"); a check on LLM output, not data extraction — consistent with "never parse prose". |
 | 2026-10-24 | Guard names ambiguous columns (session-3 module touched) | Live run: vague "could not be resolved" would waste a session-6 retry. |
+| 2026-10-24 | **SQL ceiling = 3 attempts total** | Spec "max 3 attempts". User-approved. Resolves the retry-count open question. |
+| 2026-10-24 | **Unverified after re-synthesis → keep answer + caveat** naming the figures | User-approved. SQL and rows still returned so the user can check. |
+| 2026-10-24 | **Agent-side literal check** against `allowed_values` (server guard unchanged) | Turns trap 2's silent zero rows into a fixable validation error. User-approved. |
+| 2026-10-24 | 4 terminal nodes beyond the spec's 8: refuse, clarify, give_up, add_caveat | Each route needs a node to write the answer; all deterministic, no LLM. |
+| 2026-10-24 | `AgentError` removed | Every outcome now has a route; only infrastructure errors (LLMError, MCP) propagate. |
+| 2026-10-24 | Retry Groq 400 `json_validate_failed` (providers/ touched) | A bad sample, not a bad request — found live, crashed a question. |
 
 ---
 
@@ -301,8 +325,13 @@ Things to resolve before the next stage.
 
 - [ ] **Pass bar.** Stage 1 exit criteria here say ≥90% accuracy; the spec's
       "Done when" says 25 questions *pass*. Spec wins — confirm 25/25 or 90%.
-- [ ] **Retry count.** "max 3 attempts" (spec) vs "retry ×3" (architecture):
-      3 generations total, or 1 + 3 retries?
+- [x] **Retry count.** Resolved 2026-10-24: 3 SQL attempts total (see Decisions).
+- [ ] **Rate limit vs evals/p95** (session 8). Groq account allows 8K tokens/min ≈ 1.5
+      questions/min. 25 eval questions back-to-back will be throttled and blow p95.
+      Options: pace the eval runner (~40 s between questions), shrink prompts
+      (classify uses ~1.2K tokens), or a higher Groq tier. Decide before session 8.
+- [ ] **API error handling** (session 7). LLMError / MCP failures still propagate out
+      of the graph; the API must turn them into a clean error response, not a 500 trace.
 - [x] **Data date range** (session 1). Resolved 2026-10-23: seeded `sale_date`
       spans **2023-01-01 to 2026-06-30**. 2023–2025 are full years, so
       "last year" (= 2025) is fully covered; 2026 is a partial year.

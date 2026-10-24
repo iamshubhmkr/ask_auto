@@ -1,6 +1,7 @@
 """Groq implementation of LLMProvider. The only module that imports the Groq SDK."""
 
 import asyncio
+import logging
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -17,6 +18,8 @@ from askauto.providers.base import (
     T,
     strict_json_schema,
 )
+
+log = logging.getLogger(__name__)
 
 MAX_BACKOFF_S = 8.0
 RETRYABLE = (groq.RateLimitError, groq.APIConnectionError, groq.InternalServerError)
@@ -84,10 +87,28 @@ class GroqProvider:
                     raise LLMError(
                         f"Groq call failed after {attempt + 1} attempts: {exc}"
                     ) from exc
-                await self.sleep(backoff_seconds(exc, attempt))
-            except groq.APIStatusError as exc:  # other 4xx: retrying will not help
+                delay = backoff_seconds(exc, attempt)
+                # Retries add latency the agent trace cannot see; make them visible.
+                log.warning("Groq %s (attempt %d/%d), retrying in %.1fs",
+                            type(exc).__name__, attempt + 1, self.max_retries + 1, delay)
+                await self.sleep(delay)
+            except groq.APIStatusError as exc:
+                # Groq checks strict-schema output after generation and answers 400
+                # json_validate_failed when the model missed a field. That is a bad
+                # sample, not a bad request, so it gets the same retry budget.
+                if is_schema_miss(exc) and attempt < self.max_retries:
+                    log.warning("Groq json_validate_failed (attempt %d/%d), retrying",
+                                attempt + 1, self.max_retries + 1)
+                    continue
+                # Any other 4xx: retrying will not help.
                 raise LLMError(f"Groq rejected the request ({exc.status_code}): {exc}") from exc
         raise AssertionError("unreachable")
+
+
+def is_schema_miss(exc: Exception) -> bool:
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("code") == "json_validate_failed"
 
 
 def backoff_seconds(exc: Exception, attempt: int) -> float:

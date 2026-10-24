@@ -69,13 +69,36 @@ def make_provider(
     return provider, completions, sleeps
 
 
-def status_error(status: int, headers: dict[str, str] | None = None) -> Exception:
+def status_error(status: int, headers: dict[str, str] | None = None,
+                 body: object | None = None) -> Exception:
     response = httpx.Response(status, headers=headers or {},
                               request=httpx.Request("POST", GROQ_URL))
     cls = {429: groq_provider.groq.RateLimitError,
            400: groq_provider.groq.BadRequestError,
            500: groq_provider.groq.InternalServerError}[status]
-    return cls(f"HTTP {status}", response=response, body=None)
+    return cls(f"HTTP {status}", response=response, body=body)
+
+
+# Seen live in session 6: strict mode is checked after generation on gpt-oss-20b.
+SCHEMA_MISS = {"error": {"code": "json_validate_failed",
+                         "message": "Generated JSON does not match the expected schema."}}
+
+
+async def test_json_validate_failed_is_retried_without_sleeping() -> None:
+    provider, completions, sleeps = make_provider(
+        [status_error(400, body=SCHEMA_MISS), VALID_PLAN])
+    plan = await provider.complete("generate_sql", MESSAGES, Plan)
+    assert plan.sql == "SELECT 1"
+    assert len(completions.requests) == 2
+    assert sleeps == []
+
+
+async def test_json_validate_failed_respects_the_retry_budget() -> None:
+    provider, completions, _ = make_provider(
+        [status_error(400, body=SCHEMA_MISS)] * 3, llm_max_retries=2)
+    with pytest.raises(LLMError, match="rejected the request \\(400\\)"):
+        await provider.complete("generate_sql", MESSAGES, Plan)
+    assert len(completions.requests) == 3
 
 
 VALID_PLAN = '{"sql": "SELECT 1", "assumptions": []}'

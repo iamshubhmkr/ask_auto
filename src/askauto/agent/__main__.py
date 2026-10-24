@@ -8,7 +8,7 @@ import json
 import sys
 import time
 
-from askauto.agent.graph import AgentError, build_graph, run_agent
+from askauto.agent.graph import build_graph, run_agent
 from askauto.agent.nodes import AgentNodes
 from askauto.agent.state import AgentState
 from askauto.config import get_settings
@@ -28,6 +28,7 @@ def show(state: AgentState) -> None:
               f"{json.dumps(state.result.rows[:10], default=str)}")
     if state.answer:
         print(f"\nAnswer: {state.answer.text}")
+    print(f"Status: {state.status}")
 
 
 async def main(question: str) -> int:
@@ -37,16 +38,11 @@ async def main(question: str) -> int:
         startup_schema = await tools.get_schema_context()
         graph = build_graph(AgentNodes(provider, tools, startup_schema, settings.sql_max_rows))
         start = time.perf_counter()
-        try:
-            state = await run_agent(graph, question)
-        except AgentError as exc:
-            show(exc.state)
-            print(f"\nFAILED: {exc}")
-            return 1
+        state = await run_agent(graph, question)
         show(state)
         elapsed_ms = (time.perf_counter() - start) * 1000
-        print(f"\nLatency: {elapsed_ms:.0f} ms (model {settings.groq_model})")
-    return 0
+        print(f"Latency: {elapsed_ms:.0f} ms (model {settings.groq_model})")
+    return 0 if state.status == "answered" else 1
 
 
 if __name__ == "__main__":

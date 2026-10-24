@@ -124,7 +124,13 @@ def synthesize_messages(
         "row_count": result.row_count,
         "rows_truncated": result.row_cap_hit or result.row_count > SYNTH_MAX_ROWS,
     }
+    if result.row_count == 0:
+        payload["sql"] = plan.sql
     user = json.dumps(payload, default=str)
+    if result.row_count == 0:
+        user += ("\n\nThe query returned no rows. Explain in plain words which filters "
+                 "matched nothing, using the SQL and assumptions. Do not state any figure "
+                 "such as 0 or $0: an empty result is not a measured zero.")
     if unsupported:
         user += ("\n\nYour previous answer used figures that are not in the rows: "
                  f"{', '.join(unsupported)}. Rewrite it using only figures from the rows.")

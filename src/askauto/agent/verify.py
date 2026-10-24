@@ -52,7 +52,9 @@ def figures_in(text: str) -> list[Figure]:
 def verify_answer(
     text: str, result: QueryResult, *, question: str, assumptions: list[str], sql: str
 ) -> Verification:
-    numbers: list[float] = [float(result.row_count)]
+    # An empty result is not a measured zero, so "0" is only a valid figure when
+    # rows came back (e.g. "3 regions").
+    numbers: list[float] = [float(result.row_count)] if result.row_count else []
     context = [question, sql, *assumptions]
     for row in result.rows:
         for cell in row.values():
