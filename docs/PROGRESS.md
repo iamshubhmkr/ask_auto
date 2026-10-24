@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 2 done (pending human YAML review), Session 3 (MCP server) next
+**Current stage:** 1 — Session 3 done, Session 4 (providers + config) next
 **Last updated:** 2026-10-24
 
 ---
@@ -55,20 +55,34 @@ Full fingerprint: `14cb404714fb9d9ad2f2cf1d95b29df2cca13096175414c156dec539fb128
       turnover, top line — identical expression)
 - [x] `meta_joins` has 2 rows, both many-to-one
 - [x] `tests/test_build_metadata.py` — 15 tests incl. both traps, idempotency, 3 broken-YAML cases
-- [ ] YAML read line by line by a human ← **do not skip** (user)
+- [x] YAML read line by line by a human — user reviewed 2026-10-24, no changes
 
 **Resolved glossary values** (seed 42, useful for evals): net revenue 166,989,244.64 ·
 gross revenue 173,070,073.75 · units sold 5,000 · ASP 33,397.85 · discount rate 3.51% ·
 EV share (all years) 29.08% · last year = 2025 (1,477 sales, 2025-01-01..2025-12-31).
 
 ### Session 3 — MCP server
-- [ ] `sql_guard.py` written first, with tests
-- [ ] `tests/test_sql_guard.py` — DROP, UPDATE, PRAGMA, meta_* allowlist,
-      bad column, missing LIMIT, valid join
-- [ ] Four tools implemented with Pydantic signatures
-- [ ] `get_schema_context` accepts a question and ignores it
-- [ ] Verified by hand in MCP Inspector ← **highest-value check in the build**
-- [ ] No agent code written this session
+- [x] `sql_guard.py` written first, with tests — pure (sqlglot only, no DB), passed 33/33 first run
+- [x] `tests/test_sql_guard.py` — DROP, UPDATE, PRAGMA, meta_* allowlist,
+      bad column, missing LIMIT, valid join — plus DELETE/INSERT/REPLACE/ATTACH/VACUUM,
+      multi-statement, sqlite_master, `main.sales`, `pragma_table_info()`, LIMIT clamp
+- [x] Four tools implemented with Pydantic signatures (`server.py`, contracts in `models.py`)
+- [x] `get_schema_context` accepts a question and ignores it
+- [x] Verified by hand — via `python -m askauto.mcp_server.probe` (real stdio server)
+- [ ] Verified by hand in MCP Inspector ← needs Node.js (not installed); command below
+- [x] No agent code written this session
+- [x] `tests/test_mcp_server.py` — 13 tests via in-process `Client` + 1 stdio round trip:
+      zero rows ≠ error, rejected / sqlite_error / timeout all structured,
+      timeout recovers, connection read-only
+
+**Facts for the agent (session 5):**
+- `run_sql` never raises for bad SQL: check `result.ok`; `error.kind` is
+  `rejected | sqlite_error | timeout`, `error.message` is the retry feedback.
+  Zero rows = `ok=True, row_count=0`.
+- Tool exceptions lose their message over MCP ("Error executing tool X") —
+  only `ToolError` text survives. Hence run_sql returns errors as data.
+- `list_tables` (a list return) arrives wrapped: `structured_content["result"]`.
+- `sql_guard.guard_sql` + `models.py` import no DB code, so `agent/` may reuse them.
 
 ### Session 4 — Providers and config
 - [ ] `config.py` via pydantic-settings
@@ -165,7 +179,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 2: 25 passed
+.venv/Scripts/pytest -q               # session 3: 71 passed (~5s)
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -175,6 +189,12 @@ python -m venv .venv
 # Metadata (session 2) -- ALWAYS after build_database.py (which deletes the DB file)
 # Prints meta_glossary, allowed_values, samples, unanswerable, PASS/FAIL checks
 .venv/Scripts/python scripts/build_metadata.py
+
+# MCP server (session 3)
+.venv/Scripts/python -m askauto.mcp_server           # stdio server (waits for a client)
+.venv/Scripts/python -m askauto.mcp_server.probe     # launches it + calls every tool
+# MCP Inspector (after installing Node.js LTS):
+npx @modelcontextprotocol/inspector .venv/Scripts/python -m askauto.mcp_server
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -203,6 +223,11 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-24 | **"last year" anchored to `MAX(sale_date)`**, not today's date | Always 2025 for this dataset, so eval answers never drift with the calendar. User-approved. |
 | 2026-10-24 | `sample_values` = min, median, max distinct value | Spec says "3 samples" without saying which; this is deterministic and shows the range. |
 | 2026-10-24 | Glossary YAML has a `kind: measure \| filter` field (not stored in the table) | Lets the build execute each expression the right way to prove it works. |
+| 2026-10-24 | `sample_rows` returns Pydantic `SampleRows{table, columns, rows}` (spec: `list[dict]`) | mcp-server rule / CLAUDE.md: tools return Pydantic models. User-approved. |
+| 2026-10-24 | `run_sql` returns errors as data (`ok=False`, `error.kind`) instead of raising | MCP v2 replaces a raised exception's message with "Error executing tool X"; the agent needs the reason to retry. |
+| 2026-10-24 | Minimal `config.py` created in session 3 (DB path, schema mode, timeout, row cap) | The server needs settings now; session 4 adds the Groq fields. |
+| 2026-10-24 | Manual MCP check via a Python stdio probe; Inspector deferred | Node.js not installed. User chose probe now + Inspector later. |
+| 2026-10-24 | `mcp` 2.x API: `MCPServer`, not `FastMCP` | Pinned `mcp==2.3.0`; v1 tutorials won't match. Verified against installed source. |
 
 ---
 
