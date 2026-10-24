@@ -28,7 +28,7 @@ the tooling.
 | Script | Opens DB | Produces |
 |---|---|---|
 | `scripts/build_database.py` | directly | 3 business tables + seeded data |
-| `scripts/build_metadata.py` | directly | 4 `meta_*` tables |
+| `scripts/build_metadata.py` | directly | 5 `meta_*` tables (spec's 4 + `meta_unanswerable`, see PROGRESS decisions) |
 | `scripts/build_index.py` | reads `meta_tables` | vector index (stage 2 only) |
 
 Order matters. `build_metadata` reads PRAGMA output from tables that

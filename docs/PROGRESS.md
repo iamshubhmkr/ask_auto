@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 1 done, Session 2 (metadata) next
+**Current stage:** 1 — Session 2 done (pending human YAML review), Session 3 (MCP server) next
 **Last updated:** 2026-10-24
 
 ---
@@ -44,14 +44,22 @@ Full fingerprint: `14cb404714fb9d9ad2f2cf1d95b29df2cca13096175414c156dec539fb128
 — if a rebuild prints anything else, the data changed (CLAUDE.md: that's a bug).
 
 ### Session 2 — Metadata
-- [ ] `metadata/*.yaml` authored — descriptions, grain, glossary
-- [ ] Known-unanswerable list written
-- [ ] `scripts/build_metadata.py` merges PRAGMA + YAML
-- [ ] All four `meta_*` tables populated
-- [ ] `allowed_values` populated for every categorical column
-- [ ] `meta_glossary` contains net revenue and its aliases
-- [ ] `meta_joins` has 2 rows ← empty means the DDL was wrong
-- [ ] YAML read line by line by a human ← **do not skip**
+- [x] `metadata/*.yaml` authored — `tables.yaml` (every table + column described),
+      `glossary.yaml` (7 spec terms + 8 aliases = 15 rows)
+- [x] Known-unanswerable list written — `metadata/unanswerable.yaml`, 8 topics
+- [x] `scripts/build_metadata.py` merges PRAGMA + YAML; fails loudly on YAML/DB mismatch
+      or a glossary expression that doesn't run
+- [x] All four `meta_*` tables populated — plus fifth `meta_unanswerable` (see Decisions)
+- [x] `allowed_values` populated for every categorical column (11 columns incl. `model` override)
+- [x] `meta_glossary` contains net revenue and its aliases (revenue, sales value,
+      turnover, top line — identical expression)
+- [x] `meta_joins` has 2 rows, both many-to-one
+- [x] `tests/test_build_metadata.py` — 15 tests incl. both traps, idempotency, 3 broken-YAML cases
+- [ ] YAML read line by line by a human ← **do not skip** (user)
+
+**Resolved glossary values** (seed 42, useful for evals): net revenue 166,989,244.64 ·
+gross revenue 173,070,073.75 · units sold 5,000 · ASP 33,397.85 · discount rate 3.51% ·
+EV share (all years) 29.08% · last year = 2025 (1,477 sales, 2025-01-01..2025-12-31).
 
 ### Session 3 — MCP server
 - [ ] `sql_guard.py` written first, with tests
@@ -157,12 +165,16 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 1: 10 passed
+.venv/Scripts/pytest -q               # session 2: 25 passed
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
 # Manual FK check (no sqlite3 CLI on this machine; use Python) -> 2 rows
 .venv/Scripts/python -c "import sqlite3; print(sqlite3.connect('data/askauto.db').execute('PRAGMA foreign_key_list(sales)').fetchall())"
+
+# Metadata (session 2) -- ALWAYS after build_database.py (which deletes the DB file)
+# Prints meta_glossary, allowed_values, samples, unanswerable, PASS/FAIL checks
+.venv/Scripts/python scripts/build_metadata.py
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -186,6 +198,11 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-24 | No NULLs in seeded data, though spec allows them on city/model_year/msrp | Avoid adding traps the spec didn't ask for. |
 | 2026-10-24 | Vehicles only sold within ±1 year of their model_year; EV/Hybrid weight grows yearly | Realism; gives "EV share" a real trend for evals. EV share is high vs real US market — fine for a demo. |
 | 2026-10-24 | Build tests load the script via importlib; tests never import sqlite3 | Keeps the `/stage-done` grep (sqlite3 outside mcp_server/ or scripts/) clean. |
+| 2026-10-24 | **Fifth meta table `meta_unanswerable(topic, reason)`** (spec says four) | Spec requires the known-unanswerable list to feed classify but defines no table for it. A table keeps the "prompts built from meta_* tables" invariant. User-approved. |
+| 2026-10-24 | **`vehicles.model` forced categorical** via `categorical: true` in tables.yaml (33 distinct > 25) | Exact spellings (`F-150`, `CR-V`, `Ioniq 5`) must reach the prompt, or misspellings return zero rows silently — the same failure as trap 2. Threshold stays 25 elsewhere. User-approved. |
+| 2026-10-24 | **"last year" anchored to `MAX(sale_date)`**, not today's date | Always 2025 for this dataset, so eval answers never drift with the calendar. User-approved. |
+| 2026-10-24 | `sample_values` = min, median, max distinct value | Spec says "3 samples" without saying which; this is deterministic and shows the range. |
+| 2026-10-24 | Glossary YAML has a `kind: measure \| filter` field (not stored in the table) | Lets the build execute each expression the right way to prove it works. |
 
 ---
 

@@ -1,0 +1,71 @@
+# Authored metadata for the three business tables.
+#
+# This is the half PRAGMA cannot produce: what each table and column MEANS.
+# scripts/build_metadata.py merges it with the automatic half (types, keys,
+# distinct counts, allowed values) into meta_tables and meta_columns.
+#
+# Every table and every column must be described here; the build fails if one
+# is missing or if a name below does not exist in the database.
+#
+# A column can be written as a plain description string, or as a mapping with
+#   description: ...
+#   categorical: true   # store the full allowed_values list even above 25 distinct
+
+tables:
+  dealers:
+    description: >-
+      Dealership locations in the dealer group. Use for anything by dealer,
+      city, region or dealer tier. Joins to sales on dealer_id.
+    grain: one row per dealership location
+    columns:
+      dealer_id: Dealer identifier, e.g. 'D01'. Primary key; referenced by sales.dealer_id.
+      dealer_name: Trading name of the dealership, e.g. 'Harborview Auto Group'.
+      city: City the dealership is in. One dealership per city.
+      region: >-
+        Sales region. Exactly one of the allowed values; use the stored
+        spelling ('Northeast', not 'North East').
+      tier: >-
+        Dealership size class. Flagship = largest sites, Standard = mid-size,
+        Satellite = small outlets.
+
+  vehicles:
+    description: >-
+      Vehicle catalogue: one entry per make / model / model year / powertrain
+      configuration sold by the group. Joins to sales on vehicle_id.
+    grain: one row per vehicle configuration (make, model, model_year, fuel_type)
+    columns:
+      vehicle_id: Vehicle configuration identifier, e.g. 'V01'. Primary key; referenced by sales.vehicle_id.
+      make: Manufacturer brand.
+      model:
+        description: >-
+          Model name as sold, e.g. 'F-150', 'CR-V', 'Ioniq 5'. Spellings are
+          exact (hyphens and spaces matter). The same model can appear in
+          several rows with different model_year or fuel_type.
+        categorical: true
+      model_year: Model year of the vehicle (not the year it was sold; see sales.sale_date).
+      fuel_type: >-
+        Powertrain. 'Electric' means battery-electric only; 'Hybrid' is not
+        counted as electric.
+      msrp: >-
+        Manufacturer's suggested retail price in USD. A list price, not what
+        the customer paid; use sales.sale_price for transaction values.
+
+  sales:
+    description: >-
+      Vehicle sales transactions. The fact table: every revenue, volume,
+      discount or financing question starts here. Joins to dealers on
+      dealer_id and to vehicles on vehicle_id.
+    grain: one row per sale (one vehicle sold in one transaction)
+    columns:
+      sale_id: Sale identifier, e.g. 'S00001'. Primary key.
+      dealer_id: Dealership that made the sale. Foreign key to dealers.dealer_id.
+      vehicle_id: Vehicle configuration sold. Foreign key to vehicles.vehicle_id.
+      sale_date: >-
+        Date of sale as ISO text 'YYYY-MM-DD'. Use strftime('%Y', sale_date)
+        for the year. Data runs from 2023-01-01 to 2026-06-30, so 2026 is a
+        partial year.
+      sale_price: >-
+        GROSS transaction price in USD, BEFORE discount. Do not sum this for
+        revenue: net revenue is sale_price - discount_amount (see glossary).
+      discount_amount: Discount given on the sale in USD. Subtract from sale_price for the net amount.
+      finance_type: How the purchase was paid for.

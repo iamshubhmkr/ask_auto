@@ -1,0 +1,62 @@
+# Business glossary: how each business term is computed, identically every time.
+#
+# kind: measure  -> an aggregate expression, used in SELECT
+# kind: filter   -> a predicate, used in WHERE
+#
+# Each alias becomes its own row in meta_glossary with the same sql_expression,
+# so "revenue", "turnover" and "net revenue" can never resolve differently.
+#
+# Expressions use unqualified column names as written in the spec. The build
+# runs every expression against the database and fails if one does not work.
+
+terms:
+  - term: net revenue
+    kind: measure
+    sql_expression: SUM(sale_price - discount_amount)
+    aliases: [revenue, sales value, turnover, top line]
+    notes: >-
+      Default meaning of "revenue". sale_price is gross, so always subtract
+      discount_amount.
+
+  - term: gross revenue
+    kind: measure
+    sql_expression: SUM(sale_price)
+    notes: >-
+      FLAG WHEN USED: usually a mistake. Only use when the user explicitly asks
+      for gross / pre-discount revenue, and say so in the assumptions.
+
+  - term: units sold
+    kind: measure
+    sql_expression: COUNT(*)
+    aliases: [units, volume]
+    notes: Count of rows in sales. Each sale is one vehicle.
+
+  - term: average selling price
+    kind: measure
+    sql_expression: AVG(sale_price - discount_amount)
+    aliases: [ASP]
+    notes: Average net price per vehicle sold, after discount.
+
+  - term: discount rate
+    kind: measure
+    sql_expression: SUM(discount_amount) / SUM(sale_price)
+    notes: Total discount as a fraction of gross sales. Multiply by 100 for a percentage.
+
+  - term: EV share
+    kind: measure
+    sql_expression: AVG(CASE WHEN fuel_type = 'Electric' THEN 1.0 ELSE 0.0 END)
+    aliases: [EV penetration]
+    notes: >-
+      Fraction of units sold that are battery-electric. Requires
+      sales JOIN vehicles ON sales.vehicle_id = vehicles.vehicle_id. Hybrids do
+      not count. Multiply by 100 for a percentage.
+
+  - term: last year
+    kind: filter
+    sql_expression: >-
+      CAST(strftime('%Y', sale_date) AS INTEGER) =
+      (SELECT CAST(strftime('%Y', MAX(sale_date)) AS INTEGER) - 1 FROM sales)
+    notes: >-
+      The previous full calendar year, anchored to the latest sale in the data
+      (not today's date), so answers never drift. For this dataset that is 2025.
+      State the resolved year in the assumptions.

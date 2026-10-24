@@ -1,0 +1,29 @@
+# Known-unanswerable topics, fed to the classify step so refusals are fast and
+# confident. The reason is what the user is told is missing.
+#
+# Source: docs/PROBLEM_STATEMENT.md, "Known-unanswerable list".
+# Stored in meta_unanswerable (a fifth meta table; see docs/PROGRESS.md decisions).
+
+topics:
+  - topic: customer identity or demographics
+    reason: >-
+      There is no customer table. Sales rows record the dealer and vehicle,
+      not who bought it (no name, age, gender, location or income).
+  - topic: credit scores
+    reason: >-
+      Only the finance type (Loan, Lease, Cash) is recorded. No credit or
+      lending details.
+  - topic: cost basis or true margin
+    reason: >-
+      Only selling price and discount are recorded. There is no dealer cost,
+      invoice price or margin data. msrp is a list price, not a cost.
+  - topic: inventory levels
+    reason: Only completed sales are recorded. No stock, lot or days-on-lot data.
+  - topic: test drives
+    reason: No test-drive, lead or showroom-visit data is recorded.
+  - topic: service history
+    reason: Only vehicle sales are recorded. No service, repair or warranty data.
+  - topic: salesperson attribution
+    reason: Sales are attributed to a dealership, not to an individual salesperson.
+  - topic: competitor data
+    reason: Only this dealer group's own sales are recorded. No market or competitor figures.
