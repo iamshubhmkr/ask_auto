@@ -12,7 +12,7 @@ from typing import Any
 
 from mcp import Client, StdioServerParameters
 
-from askauto.mcp_server.models import QueryResult, SchemaContext
+from askauto.mcp_server.models import QueryResult, SchemaContext, TableSummary
 
 
 class McpToolError(RuntimeError):
@@ -58,3 +58,8 @@ class McpTools:
 
     async def run_sql(self, sql: str, limit: int = 500) -> QueryResult:
         return QueryResult.model_validate(await self._call("run_sql", {"sql": sql, "limit": limit}))
+
+    async def list_tables(self) -> list[TableSummary]:
+        """A real round trip (tool results are never cached), so it doubles as a liveness check."""
+        payload = await self._call("list_tables", {})
+        return [TableSummary.model_validate(t) for t in payload["result"]]  # lists arrive wrapped

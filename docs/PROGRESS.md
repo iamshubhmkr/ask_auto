@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 6 done, Session 7 (API) next
+**Current stage:** 1 — Session 7 done, Session 8 (evals) next
 **Last updated:** 2026-10-24
 
 ---
@@ -172,11 +172,23 @@ One question ≈ 3.7K prompt tokens + output ≈ 5K → ~1.5 questions/min befor
 Single question: 2–4 s. Back-to-back: throttled. See open question on evals.
 
 ### Session 7 — API
-- [ ] `POST /ask` matching the spec contract exactly
-- [ ] `GET /health`
-- [ ] `lifespan` starts MCP once, compiles graph once, caches metadata
-- [ ] No subprocess spawned per request
-- [ ] Working `curl` command recorded below
+- [x] `POST /ask` matching the spec contract exactly — plus additive `status` (user decision)
+- [x] `GET /health` — real round trip via the `list_tables` tool (see Decisions)
+- [x] `lifespan` starts MCP once, compiles graph once, caches metadata (`create_app` factory)
+- [x] No subprocess spawned per request — verified live: MCP process count 2 → 2 across
+      requests (2 OS processes = Windows venv launcher + its child interpreter = 1 server)
+- [x] Working `curl` command recorded below (Verified commands)
+- [x] Errors: `LLMError` → 502, `McpToolError` → 503, bad body → 422 — no tracebacks
+- [x] `tests/test_api.py` — 9 tests: contract, one MCP session, refuse/clarify, zero rows,
+      502, 422, health ok + dead session → 503
+
+**Live via uvicorn + curl:** health ok · net revenue last year $52.2M, `status: answered`,
+3549 ms · credit score → refused, `sql: null`, 592 ms · empty question → 422.
+
+**Found by tests this session:** MCP `ping` is removed in protocol 2026-07-28 (works only
+in legacy mode) → `/health` always returned 503. And `list_tools` may be served from the
+MCP client's response cache, which would report a dead server as healthy. Fixed by a tool
+call (never cached): `McpTools.list_tables()`.
 
 ### Session 8 — Evals
 - [ ] `evals/questions.yaml` — 25 questions across all tiers
@@ -242,7 +254,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 6: 131 passed (~10s), no network
+.venv/Scripts/pytest -q               # session 7: 140 passed (~19s), no network
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -264,6 +276,14 @@ npx @modelcontextprotocol/inspector .venv/Scripts/python -m askauto.mcp_server
 
 # Agent (session 5) -- one question end to end, real Groq + stdio MCP server
 .venv/Scripts/python -m askauto.agent "What was our net revenue last year?"
+
+# API (session 7) -- start once, then query
+.venv/Scripts/python -m uvicorn askauto.api:app --port 8000
+curl -s http://localhost:8000/health
+curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
+  -d '{"question": "What was our net revenue last year?"}'
+# PowerShell: write the JSON body to a file and pass --data-binary "@body.json"
+# (PowerShell mangles inline double quotes passed to curl.exe)
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -316,6 +336,11 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-24 | 4 terminal nodes beyond the spec's 8: refuse, clarify, give_up, add_caveat | Each route needs a node to write the answer; all deterministic, no LLM. |
 | 2026-10-24 | `AgentError` removed | Every outcome now has a route; only infrastructure errors (LLMError, MCP) propagate. |
 | 2026-10-24 | Retry Groq 400 `json_validate_failed` (providers/ touched) | A bad sample, not a bad request — found live, crashed a question. |
+| 2026-10-25 | **`/ask` response adds `status`** (spec contract has none) | Additive; evals must tell answered / refused / clarification / failed / unverified apart. User-approved. |
+| 2026-10-25 | `sql` and `rows` are null/empty unless a query ran ok; zero-row runs keep their SQL | "Every number with the SQL that produced it"; a refusal produced none. Zero rows: the user needs the filters. |
+| 2026-10-25 | `LLMError` → 502, `McpToolError` → 503 | Clean JSON errors instead of tracebacks; resolves the session-6 open question. |
+| 2026-10-25 | `/health` calls the `list_tables` tool | MCP ping removed in protocol 2026-07-28; `list_tools` may be cached client-side. |
+| 2026-10-25 | `create_app(settings, provider, mcp_target)` factory; `app = create_app()` | Tests inject a fake provider + in-process server; uvicorn uses the defaults. |
 
 ---
 
@@ -330,8 +355,7 @@ Things to resolve before the next stage.
       questions/min. 25 eval questions back-to-back will be throttled and blow p95.
       Options: pace the eval runner (~40 s between questions), shrink prompts
       (classify uses ~1.2K tokens), or a higher Groq tier. Decide before session 8.
-- [ ] **API error handling** (session 7). LLMError / MCP failures still propagate out
-      of the graph; the API must turn them into a clean error response, not a 500 trace.
+- [x] **API error handling**. Resolved 2026-10-25: 502 / 503 JSON errors (see Decisions).
 - [x] **Data date range** (session 1). Resolved 2026-10-23: seeded `sale_date`
       spans **2023-01-01 to 2026-06-30**. 2023–2025 are full years, so
       "last year" (= 2025) is fully covered; 2026 is a partial year.
