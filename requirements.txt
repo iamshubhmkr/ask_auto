@@ -22,6 +22,9 @@ groq==1.7.0
 fastapi==0.161.1
 uvicorn==0.54.0
 
+# Frontend (session 9; a separate process that calls the API)
+streamlit==1.66.1
+
 # Dev
 pytest==9.1.1
 pytest-asyncio==1.4.0

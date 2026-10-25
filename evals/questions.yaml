@@ -1,0 +1,228 @@
+# Golden question set: 25 known-answer questions (docs/PROBLEM_STATEMENT.md, "Done when").
+#
+# expect:
+#   status        answered | refused | clarification_needed
+#   values        numbers that must appear in the agent's result rows
+#                 (filled from running reference_sql -- never typed by hand)
+#   not_values    numbers that must NOT appear (trap 1: the gross figure)
+#   labels        text that must appear in the result rows (case-insensitive)
+#   ordered       labels[i] must be in row i (rankings, "top", "most")
+#   sql_patterns  regexes the agent's SQL must match (trap checks)
+#
+# The runner re-executes every reference_sql through the MCP server before each
+# run and stops if a result no longer matches: the data is seeded, so drift is a bug.
+
+questions:
+  # --- lookups ---------------------------------------------------------------
+  - id: L1
+    tier: lookup
+    question: How many dealerships do we have?
+    reference_sql: SELECT COUNT(*) AS dealers FROM dealers
+    expect: {status: answered, values: [20]}
+
+  - id: L2
+    tier: lookup
+    question: What is the MSRP of the 2025 Toyota bZ4X?
+    reference_sql: >-
+      SELECT msrp FROM vehicles
+      WHERE make = 'Toyota' AND model = 'bZ4X' AND model_year = 2025
+    expect: {status: answered, values: [43000.0]}
+
+  - id: L3
+    tier: lookup
+    question: Which city is Peachtree Motor Group in?
+    reference_sql: SELECT city FROM dealers WHERE dealer_name = 'Peachtree Motor Group'
+    expect: {status: answered, labels: [Atlanta]}
+
+  - id: L4
+    tier: lookup
+    question: How many Flagship dealerships do we have?
+    reference_sql: SELECT COUNT(*) AS flagships FROM dealers WHERE tier = 'Flagship'
+    expect: {status: answered, values: [4]}
+
+  # --- aggregations ----------------------------------------------------------
+  - id: A1
+    tier: aggregation
+    question: How many cars have we sold in total?
+    reference_sql: SELECT COUNT(*) AS units FROM sales
+    expect: {status: answered, values: [5000]}
+
+  - id: A2
+    tier: aggregation
+    question: What was our net revenue in 2024?
+    reference_sql: >-
+      SELECT SUM(sale_price - discount_amount) AS net_revenue FROM sales
+      WHERE strftime('%Y', sale_date) = '2024'
+    expect: {status: answered, values: [46555384.34]}
+
+  - id: A3
+    tier: aggregation
+    question: What was the average selling price in 2025?
+    reference_sql: >-
+      SELECT AVG(sale_price - discount_amount) AS asp FROM sales
+      WHERE strftime('%Y', sale_date) = '2025'
+    expect: {status: answered, values: [35361.158835]}
+
+  - id: A4
+    tier: aggregation
+    question: What is our overall discount rate?
+    reference_sql: SELECT SUM(discount_amount) / SUM(sale_price) AS discount_rate FROM sales
+    expect: {status: answered, values: [0.035135]}
+
+  - id: A5
+    tier: aggregation
+    question: How many sales in 2025 were leases?
+    reference_sql: >-
+      SELECT COUNT(*) AS leases FROM sales
+      WHERE finance_type = 'Lease' AND strftime('%Y', sale_date) = '2025'
+    expect: {status: answered, values: [448]}
+
+  - id: A6
+    tier: aggregation
+    question: How many cars did we sell in December 2025?
+    reference_sql: >-
+      SELECT COUNT(*) AS units FROM sales
+      WHERE strftime('%Y-%m', sale_date) = '2025-12'
+    expect: {status: answered, values: [149]}
+
+  # --- joins -----------------------------------------------------------------
+  - id: J1
+    tier: join
+    question: What was net revenue by region in 2025?
+    reference_sql: >-
+      SELECT d.region, SUM(s.sale_price - s.discount_amount) AS net_revenue
+      FROM sales s JOIN dealers d ON s.dealer_id = d.dealer_id
+      WHERE strftime('%Y', s.sale_date) = '2025'
+      GROUP BY d.region ORDER BY d.region
+    expect:
+      status: answered
+      values: [12001860.25, 13516020.67, 13968266.36, 12742284.32]
+      labels: [Midwest, Northeast, Southeast, West]
+
+  - id: J2
+    tier: join
+    question: Which make sold the most units in 2024?
+    reference_sql: >-
+      SELECT v.make, COUNT(*) AS units
+      FROM sales s JOIN vehicles v ON s.vehicle_id = v.vehicle_id
+      WHERE strftime('%Y', s.sale_date) = '2024'
+      GROUP BY v.make ORDER BY units DESC LIMIT 1
+    expect: {status: answered, labels: [Honda], ordered: true}
+
+  - id: J3
+    tier: join
+    question: What was the EV share of units sold in 2025?
+    reference_sql: >-
+      SELECT AVG(CASE WHEN v.fuel_type = 'Electric' THEN 1.0 ELSE 0.0 END) AS ev_share
+      FROM sales s JOIN vehicles v ON s.vehicle_id = v.vehicle_id
+      WHERE strftime('%Y', s.sale_date) = '2025'
+    expect: {status: answered, values: [0.362221]}
+
+  - id: J4
+    tier: join
+    question: Which three dealers had the highest net revenue in 2025, in order?
+    reference_sql: >-
+      SELECT d.dealer_name, SUM(s.sale_price - s.discount_amount) AS net_revenue
+      FROM sales s JOIN dealers d ON s.dealer_id = d.dealer_id
+      WHERE strftime('%Y', s.sale_date) = '2025'
+      GROUP BY d.dealer_id, d.dealer_name ORDER BY net_revenue DESC LIMIT 3
+    expect:
+      status: answered
+      labels: [Harborview Auto Group, Peachtree Motor Group, Pacific Crest Motors]
+      ordered: true
+
+  - id: J5
+    tier: join
+    question: How many units of each fuel type did we sell in 2026?
+    reference_sql: >-
+      SELECT v.fuel_type, COUNT(*) AS units
+      FROM sales s JOIN vehicles v ON s.vehicle_id = v.vehicle_id
+      WHERE strftime('%Y', s.sale_date) = '2026'
+      GROUP BY v.fuel_type ORDER BY v.fuel_type
+    expect:
+      status: answered
+      values: [287, 94, 281]
+      labels: [Electric, Gasoline, Hybrid]
+
+  - id: J6
+    tier: join
+    question: Which Satellite dealership had the highest net revenue in 2024?
+    reference_sql: >-
+      SELECT d.dealer_name, SUM(s.sale_price - s.discount_amount) AS net_revenue
+      FROM sales s JOIN dealers d ON s.dealer_id = d.dealer_id
+      WHERE d.tier = 'Satellite' AND strftime('%Y', s.sale_date) = '2024'
+      GROUP BY d.dealer_id, d.dealer_name ORDER BY net_revenue DESC LIMIT 1
+    expect: {status: answered, labels: [Smoky Ridge Motors], ordered: true}
+
+  # --- planted traps ---------------------------------------------------------
+  - id: T1
+    tier: trap
+    question: What was our total revenue in 2025?
+    reference_sql: >-
+      SELECT SUM(sale_price - discount_amount) AS net_revenue, SUM(sale_price) AS gross
+      FROM sales WHERE strftime('%Y', sale_date) = '2025'
+    expect:
+      status: answered
+      values: [52228431.6]
+      not_values: [54134516.45]  # gross: the plausible wrong answer
+      sql_patterns: ['(\w+\.)?sale_price\s*-\s*(\w+\.)?discount_amount']
+
+  - id: T2
+    tier: trap
+    question: What was our turnover last year?
+    reference_sql: >-
+      SELECT SUM(sale_price - discount_amount) AS net_revenue FROM sales
+      WHERE strftime('%Y', sale_date) = '2025'
+    expect:
+      status: answered
+      values: [52228431.6]
+      sql_patterns: ['(\w+\.)?sale_price\s*-\s*(\w+\.)?discount_amount']
+
+  - id: T3
+    tier: trap
+    question: How many cars did the North East region sell in 2025?
+    reference_sql: >-
+      SELECT COUNT(*) AS units FROM sales s JOIN dealers d ON s.dealer_id = d.dealer_id
+      WHERE d.region = 'Northeast' AND strftime('%Y', s.sale_date) = '2025'
+    expect:
+      status: answered
+      values: [386]
+      sql_patterns: ["'Northeast'"]
+
+  - id: T4
+    tier: trap
+    question: How many F150s have we sold?
+    reference_sql: >-
+      SELECT COUNT(*) AS units FROM sales s JOIN vehicles v ON s.vehicle_id = v.vehicle_id
+      WHERE v.model = 'F-150'
+    expect:
+      status: answered
+      values: [257]
+      sql_patterns: ["'F-150'"]
+
+  # --- refusals --------------------------------------------------------------
+  - id: R1
+    tier: refusal
+    question: What is the average credit score of our buyers?
+    expect: {status: refused}
+
+  - id: R2
+    tier: refusal
+    question: Which salesperson sold the most cars in 2025?
+    expect: {status: refused}
+
+  - id: R3
+    tier: refusal
+    question: What is our profit margin on the Ford F-150?
+    expect: {status: refused}
+
+  # --- clarifications ---------------------------------------------------------
+  - id: C1
+    tier: clarification
+    question: Which dealer is the best?
+    expect: {status: clarification_needed}
+
+  - id: C2
+    tier: clarification
+    question: Which is better, the North or the South?
+    expect: {status: clarification_needed}

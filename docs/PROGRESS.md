@@ -6,8 +6,8 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Session 7 done, Session 8 (evals) next
-**Last updated:** 2026-10-24
+**Current stage:** 1 — Sessions 8 (built) and 9 done; full eval run pending
+**Last updated:** 2026-10-25
 
 ---
 
@@ -191,19 +191,31 @@ MCP client's response cache, which would report a dead server as healthy. Fixed 
 call (never cached): `McpTools.list_tables()`.
 
 ### Session 8 — Evals
-- [ ] `evals/questions.yaml` — 25 questions across all tiers
-- [ ] Every reference SQL verified against the real database
-- [ ] `evals/run_evals.py` scoring accuracy, validity, p50/p95
+- [x] `evals/questions.yaml` — 25 questions: lookup 4 · aggregation 6 · join 6 ·
+      trap 4 · refusal 3 · clarification 2
+- [x] Every reference SQL verified against the real database — expected values were
+      filled **from** `--print-reference`, not typed; the runner re-checks them every run
+      (via MCP, so evals never open the DB)
+- [x] `evals/run_evals.py` scoring accuracy, validity, p50/p95; paced (`--pace 40`,
+      user decision) for the 8K tokens/min limit; JSON to `evals/results/`
+- [x] `tests/test_evals.py` — scoring rules (float noise, rates as %, ordered labels,
+      gross-vs-net, status mismatch)
+- [ ] **Full eval run** ← pending (run once, with nothing else using the Groq quota)
 - [ ] `/trap-check` passes both traps
 - [ ] Scorecard recorded below
 
 ### Session 9 — Frontend
-- [ ] Streamlit client calling `POST /ask`
-- [ ] Answer, SQL expander, assumptions, trace, latency
-- [ ] Runs as a separate process from the API
+- [x] Streamlit client calling `POST /ask` — `frontend/streamlit_app.py`, streamlit 1.66.1
+- [x] Answer, SQL expander, assumptions, trace, latency — answer framed by status;
+      `$` escaped (Streamlit renders `$…$` as LaTeX)
+- [x] Runs as a separate process from the API — imports only streamlit + httpx,
+      never `askauto`; the HTTP contract is its only coupling
+- [x] Verified: page HTTP 200; `AppTest` drove the real page against the live API —
+      sidebar "API connected", answer "\$52.2 million", SQL expander, rows table,
+      footer `answered · 2917 ms · classify → … → verify`
 
 ### Stage 1 exit criteria
-- [ ] ≥90% answer accuracy on the golden set
+- [ ] 25/25 on the golden set (spec "Done when"; user decision over ≥90%)
 - [ ] 100% SQL validity
 - [ ] p95 under 8 seconds
 - [ ] `/stage-done` passes clean
@@ -254,7 +266,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 7: 140 passed (~19s), no network
+.venv/Scripts/pytest -q               # session 9: 157 passed (~18s), no network
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -284,6 +296,15 @@ curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
   -d '{"question": "What was our net revenue last year?"}'
 # PowerShell: write the JSON body to a file and pass --data-binary "@body.json"
 # (PowerShell mangles inline double quotes passed to curl.exe)
+# Browser test page for the API: http://localhost:8000/docs
+
+# Frontend (session 9) -- needs the API running; opens http://localhost:8501
+.venv/Scripts/python -m streamlit run frontend/streamlit_app.py
+
+# Evals (session 8)
+.venv/Scripts/python evals/run_evals.py --print-reference   # reference results only
+.venv/Scripts/python evals/run_evals.py                     # full paced run, ~20 min
+.venv/Scripts/python evals/run_evals.py --only T1,T3 --pace 0
 
 # Guard hook, piped test (expect exit 2 + BLOCKED message)
 echo '{"tool_input":{"file_path":"src/askauto/agent/x.py","content":"import sqlite3\n"}}' \
@@ -341,6 +362,12 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-25 | `LLMError` → 502, `McpToolError` → 503 | Clean JSON errors instead of tracebacks; resolves the session-6 open question. |
 | 2026-10-25 | `/health` calls the `list_tables` tool | MCP ping removed in protocol 2026-07-28; `list_tools` may be cached client-side. |
 | 2026-10-25 | `create_app(settings, provider, mcp_target)` factory; `app = create_app()` | Tests inject a fake provider + in-process server; uvicorn uses the defaults. |
+| 2026-10-25 | **Stage 1 bar = 25/25** (not ≥90%) | Spec "Done when" wins. User-approved. |
+| 2026-10-25 | **Eval runner paced** (40 s default) | 8K tokens/min Groq limit. Latency measured per request, excluding the pacing gap. User-approved. |
+| 2026-10-25 | Eval values matched at the precision the agent shows, within 1%; rates as fraction or % | The agent may round in SQL (0.36) or return a percentage (36.2); both are correct answers. |
+| 2026-10-25 | Session 9 built before the session-8 run (user request) | Command service outage; user asked for one combined test run at the end. |
+| 2026-10-25 | **streamlit 1.66.1** added (new dependency) | Named by the guide for session 9; user approved via plan. Pulls pandas + pyarrow. |
+| 2026-10-25 | Frontend in `frontend/`, outside the `askauto` package | A separate process; the API contract is its only coupling. |
 
 ---
 
