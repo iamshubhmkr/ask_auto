@@ -11,10 +11,11 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,8 @@ from askauto.config import Settings, get_settings
 from askauto.mcp_client import McpToolError, McpTools, stdio_params
 from askauto.mcp_server.models import SchemaContext
 from askauto.providers import LLMError, LLMProvider, get_provider
+
+WEB_PAGE = Path(__file__).parent / "web" / "index.html"
 
 
 class AskRequest(BaseModel):
@@ -103,6 +106,11 @@ def create_app(
     @app.exception_handler(McpToolError)
     async def mcp_error(_: Request, exc: McpToolError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": f"Data service error: {exc}"})
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        """A plain web page for asking questions; it calls POST /ask from the browser."""
+        return FileResponse(WEB_PAGE, media_type="text/html")
 
     @app.post("/ask")
     async def ask(body: AskRequest, request: Request) -> AskResponse:

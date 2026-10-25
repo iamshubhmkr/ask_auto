@@ -12,6 +12,9 @@ requires-python = ">=3.11"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+askauto = ["web/*.html"]  # the page served at GET /
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

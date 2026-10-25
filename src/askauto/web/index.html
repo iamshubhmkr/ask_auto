@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AskAuto</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1f2328; --muted: #656d76;
+    --border: #d0d7de; --accent: #0969da; --accent-text: #ffffff;
+    --ok: #1a7f37; --info: #0969da; --warn: #9a6700; --err: #cf222e;
+    --code-bg: #f6f8fa; --chip: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --card: #161b22; --text: #e6edf3; --muted: #8d96a0;
+      --border: #30363d; --accent: #2f81f7; --accent-text: #ffffff;
+      --ok: #3fb950; --info: #58a6ff; --warn: #d29922; --err: #f85149;
+      --code-bg: #0d1117; --chip: #21262d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 24px; margin: 0; }
+  .subtitle { color: var(--muted); margin: 0 0 20px; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px;
+          border: 1px solid var(--border); color: var(--muted); }
+  .pill.up { color: var(--ok); border-color: var(--ok); }
+  .pill.down { color: var(--err); border-color: var(--err); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+  form { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; min-width: 0; padding: 10px 12px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.primary {
+    padding: 10px 18px; font: inherit; font-weight: 600; border: 0; border-radius: 8px;
+    background: var(--accent); color: var(--accent-text); cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.6; cursor: wait; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); margin: 0 0 10px; }
+  .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .group h3 { font-size: 13px; margin: 0 0 6px; }
+  .group p { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  .chip {
+    display: block; width: 100%; text-align: left; margin: 0 0 6px; padding: 6px 10px;
+    font: inherit; font-size: 13px; color: var(--text); background: var(--chip);
+    border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px;
+           border-radius: 999px; border: 1px solid currentColor; margin-bottom: 10px; }
+  .answered { color: var(--ok); } .refused, .clarification_needed { color: var(--info); }
+  .unverified { color: var(--warn); } .failed, .error { color: var(--err); }
+  .question { color: var(--muted); font-size: 13px; margin: 0 0 6px; }
+  .answer { font-size: 17px; margin: 0 0 14px; white-space: pre-wrap; }
+  .section-title { font-size: 12px; font-weight: 600; color: var(--muted); margin: 14px 0 6px; }
+  ul.assumptions { margin: 0; padding-left: 20px; }
+  pre { margin: 0; padding: 10px 12px; background: var(--code-bg); border: 1px solid var(--border);
+        border-radius: 8px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .footer { margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>AskAuto</h1>
+    <span id="health" class="pill">Checking API…</span>
+  </header>
+  <p class="subtitle">Ask about dealer sales in plain English. Every answer shows the SQL
+    and the rows it came from.</p>
+
+  <section class="card">
+    <form id="ask-form">
+      <input id="question" type="text" maxlength="1000" autocomplete="off"
+             placeholder="e.g. What was our net revenue last year?" aria-label="Question">
+      <button id="ask-button" class="primary" type="submit">Ask</button>
+    </form>
+  </section>
+
+  <section id="result" class="card hidden" aria-live="polite"></section>
+
+  <section class="card">
+    <h2>Suggested questions</h2>
+    <div id="suggestions" class="groups"></div>
+  </section>
+</main>
+
+<script>
+const SUGGESTIONS = [
+  { title: "Revenue", note: "Net of discounts, per the glossary", questions: [
+    "What was our net revenue last year?",
+    "What was net revenue by region in 2025?",
+    "Which three dealers had the highest net revenue in 2025?",
+  ]},
+  { title: "Volume", note: "Units sold", questions: [
+    "How many cars did we sell in December 2025?",
+    "Which make sold the most units in 2024?",
+    "How many units of each fuel type did we sell in 2026?",
+  ]},
+  { title: "Pricing & mix", note: "Ratios and averages", questions: [
+    "What was the average selling price in 2025?",
+    "What is our overall discount rate?",
+    "What was the EV share of units sold in 2025?",
+  ]},
+  { title: "The planted traps", note: "Plausible wrong answers the metadata prevents", questions: [
+    "What was our total revenue in 2025?",
+    "How many cars did the North East region sell in 2024?",
+    "How many F150s have we sold?",
+  ]},
+  { title: "Out of scope", note: "Should refuse and say what is missing", questions: [
+    "What is the average credit score of our buyers?",
+    "Which salesperson sold the most cars in 2025?",
+  ]},
+  { title: "Too vague", note: "Should ask you to clarify", questions: [
+    "Which dealer is the best?",
+  ]},
+];
+
+const STATUS_LABEL = {
+  answered: "Answered", refused: "Can't answer from this data",
+  clarification_needed: "Needs clarification", unverified: "Answer not fully verified",
+  failed: "Couldn't build a query", error: "Error",
+};
+
+const $ = (id) => document.getElementById(id);
+
+function el(tag, attrs = {}, text) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;  // textContent: never parsed as HTML
+  return node;
+}
+
+function formatCell(value) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? value.toLocaleString()
+      : value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  }
+  return value === null ? "" : String(value);
+}
+
+function renderSuggestions() {
+  for (const group of SUGGESTIONS) {
+    const box = el("div", { class: "group" });
+    box.append(el("h3", {}, group.title), el("p", {}, group.note));
+    for (const q of group.questions) {
+      const chip = el("button", { class: "chip", type: "button" }, q);
+      chip.addEventListener("click", () => { $("question").value = q; ask(q); });
+      box.append(chip);
+    }
+    $("suggestions").append(box);
+  }
+}
+
+function renderResult(question, body, error) {
+  const card = $("result");
+  card.replaceChildren();
+  card.classList.remove("hidden");
+  const status = error ? "error" : body.status;
+  card.append(el("span", { class: `badge ${status}` }, STATUS_LABEL[status] || status));
+  card.append(el("p", { class: "question" }, question));
+  if (error) { card.append(el("p", { class: "answer error" }, error)); return; }
+
+  card.append(el("p", { class: "answer" }, body.answer));
+
+  if (body.assumptions.length) {
+    card.append(el("div", { class: "section-title" }, "Assumptions"));
+    const list = el("ul", { class: "assumptions" });
+    body.assumptions.forEach((a) => list.append(el("li", {}, a)));
+    card.append(list);
+  }
+  if (body.sql) {
+    card.append(el("div", { class: "section-title" }, "SQL"), el("pre", {}, body.sql));
+  }
+  if (body.rows.length) {
+    card.append(el("div", { class: "section-title" }, `Rows (${body.rows.length})`));
+    const columns = Object.keys(body.rows[0]);
+    const table = el("table");
+    const head = el("tr");
+    columns.forEach((c) => head.append(el("th", {}, c)));
+    table.append(head);
+    for (const row of body.rows.slice(0, 50)) {
+      const tr = el("tr");
+      columns.forEach((c) => tr.append(
+        el("td", typeof row[c] === "number" ? { class: "num" } : {}, formatCell(row[c]))));
+      table.append(tr);
+    }
+    const wrap = el("div", { class: "table-wrap" });
+    wrap.append(table);
+    card.append(wrap);
+  }
+  const steps = body.trace.map((t) => t.split(":")[0]).join(" → ");
+  card.append(el("div", { class: "footer" }, `${body.latency_ms} ms · ${steps}`));
+}
+
+async function ask(question) {
+  question = question.trim();
+  if (!question) return;
+  const button = $("ask-button");
+  button.disabled = true;
+  const started = Date.now();
+  const timer = setInterval(() => {
+    button.textContent = `Working… ${Math.round((Date.now() - started) / 1000)}s`;
+  }, 250);
+  try {
+    const response = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.ok) {
+      renderResult(question, body);
+    } else {
+      const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      renderResult(question, null, `API error ${response.status}: ${detail}`);
+    }
+  } catch (err) {
+    renderResult(question, null, `Could not reach the API: ${err.message}`);
+  } finally {
+    clearInterval(timer);
+    button.disabled = false;
+    button.textContent = "Ask";
+  }
+}
+
+async function checkHealth() {
+  const pill = $("health");
+  try {
+    const response = await fetch("/health");
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail);
+    pill.textContent = `Connected · ${body.model}`;
+    pill.className = "pill up";
+  } catch {
+    pill.textContent = "API not reachable";
+    pill.className = "pill down";
+  }
+}
+
+$("ask-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  ask($("question").value);
+});
+renderSuggestions();
+checkHealth();
+</script>
+</body>
+</html>

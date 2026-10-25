@@ -210,6 +210,10 @@ call (never cached): `McpTools.list_tables()`.
       `$` escaped (Streamlit renders `$…$` as LaTeX)
 - [x] Runs as a separate process from the API — imports only streamlit + httpx,
       never `askauto`; the HTTP contract is its only coupling
+- [x] Plain HTML page at `GET /` (user request) — `src/askauto/web/index.html`, served by
+      the API (same origin, no CORS); no framework, no CDN; 15 clickable suggested
+      questions by group; answer, assumptions, SQL, rows, trace + latency; text inserted
+      via `textContent` only (test asserts no `innerHTML`). Live: "How many F150s" → 257 ✓
 - [x] Verified: page HTTP 200; `AppTest` drove the real page against the live API —
       sidebar "API connected", answer "\$52.2 million", SQL expander, rows table,
       footer `answered · 2917 ms · classify → … → verify`
@@ -296,6 +300,7 @@ curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
   -d '{"question": "What was our net revenue last year?"}'
 # PowerShell: write the JSON body to a file and pass --data-binary "@body.json"
 # (PowerShell mangles inline double quotes passed to curl.exe)
+# Web page (plain HTML, served by the API): http://localhost:8000/
 # Browser test page for the API: http://localhost:8000/docs
 
 # Frontend (session 9) -- needs the API running; opens http://localhost:8501
@@ -368,6 +373,7 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-25 | Session 9 built before the session-8 run (user request) | Command service outage; user asked for one combined test run at the end. |
 | 2026-10-25 | **streamlit 1.66.1** added (new dependency) | Named by the guide for session 9; user approved via plan. Pulls pandas + pyarrow. |
 | 2026-10-25 | Frontend in `frontend/`, outside the `askauto` package | A separate process; the API contract is its only coupling. |
+| 2026-10-25 | Plain HTML page served by the API at `GET /` (user request), alongside Streamlit | Same origin avoids CORS; still a thin client calling `/ask`. `package-data` ships it. |
 
 ---
 

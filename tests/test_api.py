@@ -131,6 +131,16 @@ def test_empty_question_is_rejected(answered: TestClient) -> None:
     assert answered.post("/ask", json={"question": ""}).status_code == 422
 
 
+def test_index_page_is_served(answered: TestClient) -> None:
+    response = answered.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    page = response.text
+    assert "<title>AskAuto</title>" in page
+    assert 'fetch("/ask"' in page and 'fetch("/health")' in page
+    assert "innerHTML" not in page  # all text goes in via textContent
+
+
 def test_health(answered: TestClient) -> None:
     response = answered.get("/health")
     assert response.status_code == 200
