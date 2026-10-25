@@ -6,7 +6,7 @@ the end of every session.
 If a session dies mid-stage, the unchecked boxes below are how the next
 session knows where to resume.
 
-**Current stage:** 1 — Sessions 8 (built) and 9 done; full eval run pending
+**Current stage:** 1 — all sessions built; one fresh full eval run left to confirm 25/25
 **Last updated:** 2026-10-25
 
 ---
@@ -200,9 +200,15 @@ call (never cached): `McpTools.list_tables()`.
       user decision) for the 8K tokens/min limit; JSON to `evals/results/`
 - [x] `tests/test_evals.py` — scoring rules (float noise, rates as %, ordered labels,
       gross-vs-net, status mismatch)
-- [ ] **Full eval run** ← pending (run once, with nothing else using the Groq quota)
-- [ ] `/trap-check` passes both traps
-- [ ] Scorecard recorded below
+- [x] **Full eval run** 2026-10-25 13:20 — **24/25**, SQL validity 100% (100% first
+      attempt), p50 2.4 s, p95 3.3 s. Miss: T4 "How many F150s have we sold?" →
+      classified *ambiguous* ("no time period"). Fixed with a general classify rule
+      (no time period = all data, stated as an assumption); targeted re-run T4 + C1 + C2
+      → 3/3 (T4 answered 257; both vague questions still asked to clarify)
+- [x] Trap checks — covered by eval T1–T4 (SQL patterns + forbidden gross value), all
+      four passing after the fix. The skill's "remove the glossary entry and watch it
+      degrade" experiment was **not** run.
+- [x] Scorecard recorded below
 
 ### Session 9 — Frontend
 - [x] Streamlit client calling `POST /ask` — `frontend/streamlit_app.py`, streamlit 1.66.1
@@ -219,10 +225,22 @@ call (never cached): `McpTools.list_tables()`.
       footer `answered · 2917 ms · classify → … → verify`
 
 ### Stage 1 exit criteria
-- [ ] 25/25 on the golden set (spec "Done when"; user decision over ≥90%)
-- [ ] 100% SQL validity
-- [ ] p95 under 8 seconds
-- [ ] `/stage-done` passes clean
+- [ ] 25/25 on the golden set (spec "Done when"; user decision over ≥90%) — full run
+      24/25; the miss is fixed and verified on a targeted re-run, but **a fresh full
+      25-question run is needed to formally close Stage 1** (`python evals/run_evals.py`)
+- [x] 100% SQL validity
+- [x] p95 under 8 seconds (3.3 s)
+- [x] Stage-done checks: 158 tests pass, ruff clean, all invariant greps clean (no DB
+      imports outside mcp_server/scripts, no groq outside providers, no LLM in
+      mcp_server, frontend never imports askauto, no schema names in prompts, every
+      LLM call passes a schema)
+
+### Documentation (user request)
+- [x] `docs/INTERVIEW_GUIDE.ipynb` — pitch, diagrams, design decisions + trade-offs,
+      safety layers, real results, lessons from bugs, limits, interview Q&A, glossary
+- [x] `docs/CODE_WALKTHROUGH.ipynb` — the code in reading order with runnable cells
+      (no Groq calls; outputs saved from a real run), ending with one question traced
+      through every function
 
 ---
 
@@ -253,7 +271,8 @@ Record every eval run so regressions are visible.
 
 | Date | Stage | Accuracy | SQL validity | p50 | p95 | Cost/question |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| 2026-10-25 13:20 | 1 | 24/25 (96%) — miss T4 | 100% (first attempt 100%) | 2385 ms | 3335 ms | n/a (Groq free tier) |
+| 2026-10-25 13:22 | 1 | subset T4, C1, C2: 3/3 after the classify fix | 100% | 999 ms | 4057 ms | n/a |
 
 ---
 
@@ -270,7 +289,7 @@ python -m venv .venv
 # Checks
 .venv/Scripts/python -m pip check     # "No broken requirements found."
 .venv/Scripts/ruff check .            # "All checks passed!"
-.venv/Scripts/pytest -q               # session 9: 157 passed (~18s), no network
+.venv/Scripts/pytest -q               # final: 158 passed (~20s), no network
 
 # Database (session 1) -- prints PASS/FAIL report + fingerprint, exit 1 on any FAIL
 .venv/Scripts/python scripts/build_database.py
@@ -374,6 +393,9 @@ Anything done differently from the spec, with the reason. Empty is good.
 | 2026-10-25 | **streamlit 1.66.1** added (new dependency) | Named by the guide for session 9; user approved via plan. Pulls pandas + pyarrow. |
 | 2026-10-25 | Frontend in `frontend/`, outside the `askauto` package | A separate process; the API contract is its only coupling. |
 | 2026-10-25 | Plain HTML page served by the API at `GET /` (user request), alongside Streamlit | Same origin avoids CORS; still a thin client calling `/ask`. `package-data` ships it. |
+| 2026-10-25 | classify rule: a missing time period is not ambiguity | Found by eval T4. A general rule, not an eval patch; re-checked that vague questions still get a clarification. |
+| 2026-10-25 | Subset eval runs (`--only`) don't evaluate the Stage 1 bar; notebooks read full runs only | A 3/3 subset printed "MET" and would have shown as the scorecard. |
+| 2026-10-25 | Docs as notebooks (user request), built by a generator that executes each cell | Outputs are real, not typed. Matches the existing ipynb style in docs/. |
 
 ---
 

@@ -66,6 +66,8 @@ Decide one label:
   changes the answer, and nothing below settles it. Give one clarifying_question.
   Spelling, spacing, case or abbreviation differences from stored category values
   are NOT ambiguity: the SQL step maps them to the exact stored value.
+  A missing time period is NOT ambiguity either: it means all available data,
+  stated as an assumption.
 - unanswerable: it needs data listed under "Not available" or otherwise absent.
   In reason, name exactly what is missing.
 Prefer answerable whenever a glossary term or a stated assumption resolves it."""

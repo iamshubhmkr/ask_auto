@@ -243,8 +243,8 @@ def scorecard(model: str, outcomes: list[Outcome]) -> dict[str, Any]:
     }
 
 
-def print_scorecard(card: dict[str, Any]) -> bool:
-    met = (card["passed"] == card["questions"]
+def print_scorecard(card: dict[str, Any], full_run: bool = True) -> bool:
+    met = (full_run and card["passed"] == card["questions"]
            and card["sql_validity"] == 1.0
            and card["latency_p95_ms"] < P95_TARGET_MS)
     print(f"\nScorecard ({card['model']}, {card['timestamp']})")
@@ -254,8 +254,11 @@ def print_scorecard(card: dict[str, Any]) -> bool:
           f"{card['first_attempt_sql_validity']:.0%})")
     print(f"  Latency         p50 {card['latency_p50_ms']} ms, p95 {card['latency_p95_ms']} ms "
           f"(target < {P95_TARGET_MS})")
-    print(f"  Stage 1 bar     {'MET' if met else 'NOT MET'} "
-          "(25/25, 100% SQL validity, p95 < 8 s)")
+    if full_run:
+        print(f"  Stage 1 bar     {'MET' if met else 'NOT MET'} "
+              "(25/25, 100% SQL validity, p95 < 8 s)")
+    else:
+        print("  Stage 1 bar     not evaluated (subset run; needs all 25 questions)")
     return met
 
 
@@ -289,12 +292,13 @@ def main() -> int:
 
     model, outcomes = ask_all(questions, args.url, args.pace)
     card = scorecard(model, outcomes)
-    met = print_scorecard(card)
+    card["full_run"] = not args.only
+    met = print_scorecard(card, full_run=card["full_run"])
     RESULTS_DIR.mkdir(exist_ok=True)
     path = RESULTS_DIR / f"{datetime.now():%Y-%m-%d_%H%M}.json"
     path.write_text(json.dumps(card, indent=2), encoding="utf-8")
     print(f"  Saved           {path.relative_to(EVALS_DIR.parent)}")
-    return 0 if met else 1
+    return 0 if met or args.only else 1
 
 
 if __name__ == "__main__":

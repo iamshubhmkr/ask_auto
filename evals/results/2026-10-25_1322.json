@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-10-25T13:22:44",
+  "model": "openai/gpt-oss-20b",
+  "questions": 3,
+  "passed": 3,
+  "accuracy": 1.0,
+  "by_tier": {
+    "trap": "1/1",
+    "clarification": "2/2"
+  },
+  "sql_validity": 1.0,
+  "first_attempt_sql_validity": 1.0,
+  "latency_p50_ms": 999,
+  "latency_p95_ms": 4057,
+  "outcomes": [
+    {
+      "id": "T4",
+      "tier": "trap",
+      "question": "How many F150s have we sold?",
+      "passed": true,
+      "reasons": [],
+      "status": "answered",
+      "answer": "We sold 257 F-150s. This figure comes from the sales count for the F-150 model. The assumption is that each row in sales represents a unit sold. No other figures are used.",
+      "sql": "SELECT COUNT(*) AS f150_units_sold FROM sales JOIN vehicles ON sales.vehicle_id = vehicles.vehicle_id WHERE vehicles.model = 'F-150' LIMIT 500",
+      "generated_sql": true,
+      "retried_sql": false,
+      "latency_ms": 4057,
+      "trace": [
+        "classify: answerable - The data includes sales of F-150 vehicles, so the count can be computed.",
+        "load_context: 3 tables, 15 glossary terms (mode=full)",
+        "generate_sql: attempt 1",
+        "validate: ok",
+        "execute: 1 rows",
+        "inspect: rows",
+        "synthesize: 146 chars",
+        "verify: 1/3 figures found in rows; not found: 150, 150",
+        "synthesize: 171 chars",
+        "verify: 1/1 figures found in rows"
+      ]
+    },
+    {
+      "id": "C1",
+      "tier": "clarification",
+      "question": "Which dealer is the best?",
+      "passed": true,
+      "reasons": [],
+      "status": "clarification_needed",
+      "answer": "What metric would you like to use to determine the best dealer (e.g., revenue, units sold, average selling price, discount rate, EV share, etc.)?",
+      "sql": null,
+      "generated_sql": false,
+      "retried_sql": false,
+      "latency_ms": 999,
+      "trace": [
+        "classify: ambiguous - The term 'best' is not defined.",
+        "clarify: asked the user to clarify"
+      ]
+    },
+    {
+      "id": "C2",
+      "tier": "clarification",
+      "question": "Which is better, the North or the South?",
+      "passed": true,
+      "reasons": [],
+      "status": "clarification_needed",
+      "answer": "Which metric would you like to use to determine which region is better?",
+      "sql": null,
+      "generated_sql": false,
+      "retried_sql": false,
+      "latency_ms": 987,
+      "trace": [
+        "classify: ambiguous - The question is ambiguous because 'better' could refer to many metrics such as revenue, units sold, or profit, and the user has not specified which metric to compare.",
+        "clarify: asked the user to clarify"
+      ]
+    }
+  ]
+}
